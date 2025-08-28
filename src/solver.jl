@@ -10,8 +10,9 @@ export nkroot!
 # - have a norm
 # - be broadcastable
 
-function nkroot!(F, x, opts::Options=Options(); callback=nothing)
 
+# TODO: modify interface to allow passing of jacobian
+function nkroot!(F, x, opts::Options=Options(); callback=nothing)
     # construct jacobian
     if opts.use_AD 
         jac = jacobianAD(F, x)
@@ -26,8 +27,8 @@ function nkroot!(F, x, opts::Options=Options(); callback=nothing)
     r = F(similar(x), x)
 
     # maybe new solution and maybe new residual
-    xx     = similar(x)
-    rr     = similar(x)
+    xx = similar(x)
+    rr = similar(x)
 
     # precompute residual norm
     r_norm  = norm(r)
@@ -36,9 +37,9 @@ function nkroot!(F, x, opts::Options=Options(); callback=nothing)
     Δ = opts.Δ_init
 
     # initialize status
-    status = :maxiter_reached
-    it = opts.maxiter
-    gmres_maxit = 0
+    status       = :maxiter_reached
+    it           = opts.maxiter
+    gmres_maxit  = 0
     gmres_minres = 1.0
 
     # print header and zero iteration
@@ -60,14 +61,14 @@ function nkroot!(F, x, opts::Options=Options(); callback=nothing)
         # overwrites dx with solution
         if opts.use_hookstep
             _, gmres_r_norm, gmres_iter = gmres!(dx, jac, r, Δ; rel_rtol=opts.gmres_rel_rtol,
-                                                                maxiter=opts.gmres_maxiter,
-                                                                m=opts.gmres_m,
-                                                                verbose=opts.gmres_verbose)
+                                                                 maxiter=opts.gmres_maxiter,
+                                                                       m=opts.gmres_m,
+                                                                 verbose=opts.gmres_verbose)
         else
             _, gmres_r_norm, gmres_iter = gmres!(dx, jac, r; rel_rtol=opts.gmres_rel_rtol,
-                                                            maxiter=opts.gmres_maxiter,
-                                                            m=opts.gmres_m,
-                                                            verbose=opts.gmres_verbose)
+                                                              maxiter=opts.gmres_maxiter,
+                                                                    m=opts.gmres_m,
+                                                              verbose=opts.gmres_verbose)
         end
 
         # update GMRES status
@@ -121,7 +122,7 @@ function nkroot!(F, x, opts::Options=Options(); callback=nothing)
         end
 
         # execute callback if needed
-        if !( callback === nothing)
+        if !isnothing(callback)
             callback(iter, x)
         end
 

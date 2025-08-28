@@ -5,19 +5,20 @@ function test1(out::Vector, x::Vector)
 end
 
 @testset "test 1                                   " begin
-
     for use_AD in [true, false], use_hookstep in [true, false]
         # initial guess
         x = Float64[2.0]
 
         # default options
-        opts = Options(use_AD=use_AD, use_hookstep=use_hookstep, verbose=false)
+        opts = Options(use_AD       = use_AD,
+                       use_hookstep = use_hookstep,
+                       verbose      = false)
 
         data = []
         callback(it, x) = push!(data, x[1])
 
         # run
-        status = nkroot!(test1, x, opts; callback=callback)
+        status = nkroot!(test1, x, opts; callback=callback)[1]
 
         # check status
         @test status == :converged
