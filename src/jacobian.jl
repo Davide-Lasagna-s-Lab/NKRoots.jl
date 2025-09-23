@@ -15,7 +15,7 @@ jacobianAD(F, x) =
     JacobianAD(F, x, (similar(x, Dual{eltype(x)}), similar(x, Dual{eltype(x)})))
 
 # does nothing
-update!(j::JacobianAD) = nothing
+update!(::JacobianAD) = nothing
 
 # matrix vector product function required by GMRES
 function Base.:*(op::JacobianAD{X}, y::X) where {X}

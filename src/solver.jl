@@ -4,22 +4,37 @@ using GMRES
 
 export nkroot!
 
-# interface
-# x should
-# - have similar
-# - have a norm
-# - be broadcastable
+"""
+    nkroot!(F, J, x, update!, opts=Options(); callback=nothing)
 
+Solve a root finding problem using Newton-GMRES with an added hookstep,
+starting with the initial guess `x`.
 
-# TODO: modify interface to allow passing of jacobian
-function nkroot!(F, x, opts::Options=Options(); callback=nothing)
-    # construct jacobian
-    if opts.use_AD 
-        jac = jacobianAD(F, x)
-    else
-        jac = jacobianFD(F, x, opts.ϵ)
-    end
+# Arguments
+- `F`: objective function
+- `J`: jacobian of the objective function w.r.t. `x`
+- `update!`: method to update the state of the jacobian for the next Newton
+             iteration
+- `opts::Options`: general root-finding options
+- `callback=nothing`: user-defined callback method, required signature
+                          `callback(iter::Int, x::X)`
 
+# Interface requirements for `x`
+- `similar(::X)->X`
+- `norm(::X)->Real`
+- general vector broadcasting rules
+
+# Interface requirements for `J`
+- `*(::J, ::X)->X`
+- `update!(::J)->J`
+
+To update the jacobian properly it is required that the object somehow has
+access to the current state of the proposed root `x`. This is most easily
+achieved by having `x` be one of the fields of the jacobian type. See
+[`JacobianAD`](@ref) and [`JacobianFD`](@ref) for examples of such an
+implementation.
+"""
+function nkroot!(F, J, x, update!, opts::Options=Options(); callback=nothing)
     # correction
     dx = similar(x)
 
@@ -45,7 +60,6 @@ function nkroot!(F, x, opts::Options=Options(); callback=nothing)
     # print header and zero iteration
     if opts.verbose
         display_header()
-        #             (iter, gmres_iter, gmres_r_norm, dx_norm, Δ, ρ, r_norm)
         display_status(   0,          0,            0,       0, Δ, 0, r_norm)
     end
 
@@ -60,15 +74,15 @@ function nkroot!(F, x, opts::Options=Options(); callback=nothing)
 
         # overwrites dx with solution
         if opts.use_hookstep
-            _, gmres_r_norm, gmres_iter = gmres!(dx, jac, r, Δ; rel_rtol=opts.gmres_rel_rtol,
-                                                                 maxiter=opts.gmres_maxiter,
-                                                                       m=opts.gmres_m,
-                                                                 verbose=opts.gmres_verbose)
+            _, gmres_r_norm, gmres_iter = gmres!(dx, J, r, Δ; rel_rtol=opts.gmres_rel_rtol,
+                                                               maxiter=opts.gmres_maxiter,
+                                                                     m=opts.gmres_m,
+                                                               verbose=opts.gmres_verbose)
         else
-            _, gmres_r_norm, gmres_iter = gmres!(dx, jac, r; rel_rtol=opts.gmres_rel_rtol,
-                                                              maxiter=opts.gmres_maxiter,
-                                                                    m=opts.gmres_m,
-                                                              verbose=opts.gmres_verbose)
+            _, gmres_r_norm, gmres_iter = gmres!(dx, J, r; rel_rtol=opts.gmres_rel_rtol,
+                                                            maxiter=opts.gmres_maxiter,
+                                                                  m=opts.gmres_m,
+                                                            verbose=opts.gmres_verbose)
         end
 
         # update GMRES status
@@ -81,7 +95,7 @@ function nkroot!(F, x, opts::Options=Options(); callback=nothing)
         # whether the correction is within the trust region boundary
         hits_boundary = norm(dx) ≥ Δ
 
-        # new candiate solution. Note we used the positive residual for the linear system
+        # new candidate solution. Note we used the positive residual for the linear system
         xx .= x .- dx
 
         # new residual
@@ -101,14 +115,14 @@ function nkroot!(F, x, opts::Options=Options(); callback=nothing)
         end
 
         # if there is some reduction
-        if ρ  > opts.η
+        if ρ > opts.η
             # update solution and residual
             x .= xx
             r .= rr
 
             # update jacobian (which is hooked onto x)
-            update!(jac)
-            
+            update!(J)
+
             # and residual norm, so we do not need to recompute it
             r_norm = rr_norm
         end
@@ -137,14 +151,32 @@ function nkroot!(F, x, opts::Options=Options(); callback=nothing)
             it = iter
             break
         end
+        # TODO: reimplement?
         # if step < opts.min_step
         #     status = :min_step_reached
         #     break
         # end
     end
-
     
-    return status, it, gmres_maxit, gmres_minres
+    return status, it, r_norm, gmres_maxit, gmres_minres
+end
+
+"""
+    nkroot!(F, x, opts=Options(); callback=nothing)
+
+Root-finding method that generates a jacobian-vector product either from
+automatic differentiation or from finite-differencing.
+"""
+function nkroot!(F, x, opts::Options=Options(); callback=nothing)
+    # construct jacobian
+    if opts.use_AD
+        jac = jacobianAD(F, x)
+    else
+        jac = jacobianFD(F, x, opts.ϵ)
+    end
+
+    # solve root with jacobian
+    return nkroot!(F, jac, x, update!, opts, callback=callback)
 end
 
 
