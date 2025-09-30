@@ -34,7 +34,7 @@ achieved by having `x` be one of the fields of the jacobian type. See
 [`JacobianAD`](@ref) and [`JacobianFD`](@ref) for examples of such an
 implementation.
 """
-function nkroot!(F, J, x, update!, opts::Options=Options(); callback=nothing)
+function nkroot!(F, J, x, opts::Options=Options(); callback=nothing)
     # correction
     dx = similar(x)
 
@@ -93,7 +93,10 @@ function nkroot!(F, J, x, update!, opts::Options=Options(); callback=nothing)
         gmres_rel_rnorm = gmres_r_norm/r_norm
 
         # whether the correction is within the trust region boundary
-        hits_boundary = norm(dx) ≥ Δ
+        hits_boundary = (dx_norm = norm(dx)) ≥ Δ
+
+        # determine step size
+        step = (dx_norm < Δ * (1 + 1e-6) && gmres_r_norm <= opts.gmres_rel_rtol) ? dx_norm : Δ
 
         # new candidate solution. Note we used the positive residual for the linear system
         xx .= x .- dx
@@ -127,9 +130,6 @@ function nkroot!(F, J, x, update!, opts::Options=Options(); callback=nothing)
             r_norm = rr_norm
         end
 
-        # correction norm
-        dx_norm = norm(dx)
-
         # display output
         if opts.verbose && (iter % opts.skipiter == 0)
             display_status(iter, gmres_iter, gmres_rel_rnorm, dx_norm, Δ, ρ, r_norm)
@@ -151,13 +151,13 @@ function nkroot!(F, J, x, update!, opts::Options=Options(); callback=nothing)
             it = iter
             break
         end
-        # TODO: reimplement?
-        # if step < opts.min_step
-        #     status = :min_step_reached
-        #     break
-        # end
+        if step < opts.min_step
+            status = :min_step_reached
+            break
+        end
+
     end
-    
+
     return status, it, r_norm, gmres_maxit, gmres_minres
 end
 
@@ -176,7 +176,7 @@ function nkroot!(F, x, opts::Options=Options(); callback=nothing)
     end
 
     # solve root with jacobian
-    return nkroot!(F, jac, x, update!, opts, callback=callback)
+    return nkroot!(F, jac, x, opts, callback=callback)
 end
 
 
