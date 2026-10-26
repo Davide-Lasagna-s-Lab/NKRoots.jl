@@ -1,0 +1,107 @@
+# Trace: a record of a search, passed as the callback of nkroot!, as the Trace of ReSolver.jl.
+
+export Trace
+
+"""
+    Trace(; keep=false)
+
+History of a search, filled when passed as `callback` to [`nkroot!`](@ref). At the start and
+after every iteration it records
+
+- `iter`, the iteration number, and `time`, the seconds elapsed since the first record;
+- `res`, the residual norm `‖r‖`;
+- `residuals`, `products` and `preconditioner`, the cumulative numbers of evaluations of the
+  residual, of products with the Jacobian and of applications of the preconditioner;
+- `krylov`, the relative residual of the GMRES solution of the Newton system after each Arnoldi
+  step of the iteration (empty at the start);
+- `step`, `"newton"` if the accepted step is the GMRES step inside the trust region, `"hook"` if
+  it lies on its boundary (empty at the start);
+- `radius`, the trust-region radius with which the accepted step was computed (at the start, the
+  initial radius), `steplength`, the length of that step, and `ratio`, the ratio of the actual to
+  the predicted reduction of `‖r‖²`;
+- `rejected`, the number of trials with a ratio below `eta`, and `trials`, the radius and the
+  ratio of every trial but the accepted one, in order;
+- `x`, a copy of the iterate, only with `keep=true`.
+
+The same trace can follow several calls to `nkroot!`; the iteration numbers restart at zero with
+each call. A callback that also stops the search can call the trace first:
+`callback = info -> (trace(info); stop(info))`.
+
+```julia
+trace = Trace()
+nkroot!(F!, J, x; callback=trace)
+trace.res      # residual norms, in order
+trace.products # Jacobian products, cumulative
+```
+"""
+struct Trace
+              iter::Vector{Int}                            # iteration number
+              time::Vector{Float64}                        # seconds since the first record
+               res::Vector{Float64}                        # residual norm ‖r‖
+         residuals::Vector{Int}                            # residual evaluations, cumulative
+          products::Vector{Int}                            # Jacobian products, cumulative
+    preconditioner::Vector{Int}                            # preconditioner applications, cumulative
+            krylov::Vector{Vector{Float64}}                # relative GMRES residuals of the iteration
+              step::Vector{String}                         # "newton" or "hook"
+            radius::Vector{Float64}                        # radius of the accepted step
+        steplength::Vector{Float64}                        # length of the accepted step
+             ratio::Vector{Float64}                        # actual over predicted reduction of ‖r‖²
+          rejected::Vector{Int}                            # trials with a ratio below eta
+            trials::Vector{Vector{Tuple{Float64, Float64}}} # radius and ratio of the other trials
+                 x::Vector{Any}                            # copies of the iterates, with keep=true
+              keep::Bool                                   # keep the iterates
+                t₀::Base.RefValue{Float64}                 # wall-clock time of the first record
+
+    Trace(; keep::Bool=false) = new(Int[],
+                                    Float64[],
+                                    Float64[],
+                                    Int[],
+                                    Int[],
+                                    Int[],
+                                    Vector{Float64}[],
+                                    String[],
+                                    Float64[],
+                                    Float64[],
+                                    Float64[],
+                                    Int[],
+                                    Vector{Tuple{Float64, Float64}}[],
+                                    Any[],
+                                    keep,
+                                    Ref(0.0))
+end
+
+# record one iteration; never stops the search
+function (trace::Trace)(info::NamedTuple)
+    isempty(trace.time) && (trace.t₀[] = time())
+
+    push!(trace.iter,           info.iter)
+    push!(trace.time,           time() - trace.t₀[])
+    push!(trace.res,            info.res)
+    push!(trace.residuals,      info.evaluations.residuals)
+    push!(trace.products,       info.evaluations.products)
+    push!(trace.preconditioner, info.evaluations.preconditioner)
+    push!(trace.krylov,         copy(info.krylov))
+    push!(trace.step,           info.step)
+    push!(trace.radius,         info.radius)
+    push!(trace.steplength,     info.steplength)
+    push!(trace.ratio,          info.ratio)
+    push!(trace.rejected,       info.rejected)
+    push!(trace.trials,         copy(info.trials))
+    trace.keep && push!(trace.x, copy(info.x))
+
+    return false
+end
+
+Base.length(trace::Trace) = length(trace.res)
+
+# a one-line summary per record
+function Base.show(io::IO, ::MIME"text/plain", trace::Trace)
+    println(io, "Trace with $(length(trace)) records")
+    length(trace) == 0 && return
+    println(io, "  iter      ‖r‖        radius       ρ      krylov   products   rejected     time")
+    for i in eachindex(trace.res)
+        @printf(io, "%6d  %.4e  %.3e  %8.3f  %6d  %9d  %9d  %7.1f\n",
+                trace.iter[i], trace.res[i], trace.radius[i], trace.ratio[i], length(trace.krylov[i]),
+                trace.products[i], trace.rejected[i], trace.time[i])
+    end
+end

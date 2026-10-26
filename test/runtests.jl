@@ -1,4 +1,5 @@
 using LinearAlgebra
+using Random
 using NKRoots
 using Test
 

@@ -10,9 +10,9 @@ end
     J = jacobianFD(test, x)
     @test norm(J*[1.0] - [4.0]) < 1e-5
 
-    # update x to 4 and update jacobian object, check derivative
+    # move to x = 4 and check the derivative
     x .*= 2.0
-    update!(J)
+    update!(J, x, test(similar(x), x))
     @test norm(J*[1.0] - [8.0]) < 1e-5
 end
 
@@ -22,8 +22,8 @@ end
     J = jacobianAD(test, x)
     @test J*[1.0] == [4.0]
 
-    # update x to 4 and update jacobian object, check derivative
+    # move to x = 4 and check the derivative
     x .*= 2.0
-    update!(J)
+    update!(J, x, test(similar(x), x))
     @test J*[1.0] == [8.0]
 end

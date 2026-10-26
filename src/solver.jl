@@ -1,198 +1,350 @@
-using LinearAlgebra
-using Printf
-using GMRES
+# Newton–Krylov hookstep for F(x) = 0 (Viswanath 2007, https://arxiv.org/abs/0809.1498), as the
+# NewtonHookstep of ReSolver.jl, for any vector type.
+#
+# Newton's method solves F(x) = 0 by repeatedly solving the linear system
+#
+#     J δx = -r,     r = F(x),                                                       (1)
+#
+# with J the Jacobian of F at x. Far from a root the full Newton step is unreliable, so the step is
+# restricted to a trust region ‖δx‖ ≤ Δ, inside which the linear model r + J δx is trusted:
+#
+#     min ‖r + J δx‖   subject to   ‖δx‖ ≤ Δ.                                       (2)
+#
+# Krylov space. Only the action of J is used. The Arnoldi iteration started from b = -r builds an
+# orthonormal basis Qₙ of the Krylov space and the (n+1) × n Hessenberg matrix H with
+# J Qₙ = Qₙ₊₁ H. For δx = Qₙ y, ‖r + J δx‖ = ‖g - H y‖ with g = (‖b‖, 0, …, 0) and ‖δx‖ = ‖y‖, so
+# that (2) in the Krylov space is the small problem
+#
+#     min ‖g - H y‖   subject to   ‖y‖ ≤ Δ,                                          (3)
+#
+# solved from the SVD of H (hookstep.jl). The Krylov space stops growing when the residual of the
+# unconstrained least-squares (GMRES) solution falls below `krylov_tol` ‖b‖, monitored by Givens
+# rotations of H at no cost, or at dimension `krylov_dim`. The criterion is on the unconstrained
+# problem on purpose: on the boundary of the trust region the residual of the hookstep stalls at a
+# level set by Δ, which no larger space can lower.
+#
+# Right preconditioning. With a preconditioner M the Arnoldi iteration runs on J M⁻¹ and the step
+# is δx = M⁻¹ Qₙ y: the residual of the model is unchanged, and so is the meaning of `krylov_tol`.
+# The trust region still bounds the step δx, not its Krylov coordinates: ‖δx‖ = ‖R y‖ with
+# Rᵀ R = G the Gram matrix of the vectors zⱼ = M⁻¹ qⱼ, and (3) keeps its form in u = R y with
+# H R⁻¹ in place of H. With `flexible=true` the zⱼ are kept as the Arnoldi iteration computes
+# them, the step is Zₙ y and G their inner products (flexible GMRES, Saad 1993, which also allows
+# a preconditioner that changes between Arnoldi steps). Otherwise G comes from `gram(M, Qₙ)`,
+# which a preconditioner can compute cheaply, and the step is M⁻¹ (Qₙ y).
+#
+# Trust-region update. The model predicts the reduction β² - ‖g - H y‖² of ‖r‖², and the step is
+# judged by the ratio ρ of the actual reduction to the predicted one.
+#   trust=:ratio   ρ < 1/4 shrinks Δ by 4, ρ > 3/4 on the boundary doubles it up to `Δmax`;
+#                  the step is accepted if ρ > `eta`, otherwise the hookstep for the smaller Δ is
+#                  computed in the same Krylov space, without new products with J.
+#   trust=:scan    a trial costs one residual against the products of the whole Krylov space, so
+#                  the hooksteps at the radii Δ p, p = 1/8 to 4 in steps of √2 (capped by `Δmax` and
+#                  by the length of the GMRES step), are all tried; the one of smallest residual
+#                  among those with ρ > `eta` is accepted, and the next iteration starts from the
+#                  length of its step. If none is accepted, the scan starts again below.
 
-export nkroot!
+export nkroot!, update!, gram
+
+# the factors of the radius tried by trust=:scan, 1/8 to 4 in steps of √2
+const SCAN = 2.0 .^ (-3:0.5:2)
 
 """
-    nkroot!(F, J, x, update!, opts=Options(); callback=nothing)
+    nkroot!(F!, J, x; precond=nothing, flexible=false, krylov_dim=50, krylov_tol=1e-3,
+            Δ=1e-2, Δmax=Inf, eta=1e-3, maxiter=20, tol=1e-10, trust=:ratio,
+            verbose=true, io=stdout, callback=info -> false) -> (; status, iter, res)
 
-Solve a root finding problem using Newton-GMRES with an added hookstep,
-starting with the initial guess `x`.
+Solve `F(x) = 0` by the Newton–Krylov hookstep from the guess `x`, overwritten with the root.
 
-# Arguments
-- `F`: objective function
-- `J`: jacobian of the objective function w.r.t. `x`
-- `update!`: method to update the state of the jacobian for the next Newton
-             iteration
-- `opts::Options`: general root-finding options
-- `callback=nothing`: user-defined callback method, required signature
-                          `callback(iter::Int, x::X)`
+- `F!(out, x)` writes the residual into `out` and returns it.
+- `J` is the Jacobian: `mul!(out, J, v)` applies it, and `update!(J, x, r)` linearises it at `x`,
+  with `r = F(x)`, at the start of every Newton iteration (see [`jacobianFD`](@ref)).
+- `precond`, a right preconditioner `M`: `ldiv!(out, M, v)` applies `M⁻¹`, `update!(M, x)`
+  linearises it at `x` with the Jacobian, and `gram(M, Q)`, the Gram matrix of the vectors
+  `M⁻¹ Q[j]`, gives the length of a step (the default applies `M⁻¹` to each). The trust region
+  bounds the step in `x`, with or without preconditioner.
+- `flexible=true` keeps the vectors `M⁻¹ qⱼ` of the Arnoldi iteration: the step and its length
+  come from them, at the cost of one more vector per Krylov dimension and with no `gram`.
+- `krylov_dim`, `krylov_tol`: largest dimension of the Krylov space, and relative residual of the
+  GMRES solution of the Newton system at which it stops growing.
+- `Δ`, `Δmax`: initial and largest trust-region radius. `eta`: smallest ratio of the actual to
+  the predicted reduction of `‖r‖²` for a step to be accepted.
+- `trust=:ratio` updates the radius from the ratio of each trial; `trust=:scan` tries several radii
+  in the same Krylov space and keeps the best.
+- The search stops when `‖r‖ < tol`, after `maxiter` iterations, when the trust region collapses,
+  or when `callback(info)` returns `true`, called at the start and after every iteration with
+  `info = (; iter, x, res, evaluations, krylov, step, radius, steplength, ratio, rejected, trials)`:
+  the cumulative counts of residuals, Jacobian products and preconditioner applications, the
+  relative residual of the GMRES solution after each Arnoldi step, `"newton"` or `"hook"`, the
+  radius of the accepted step, its length, its ratio, the number of rejected trials and the radius
+  and ratio of every trial but the accepted one. A [`Trace`](@ref) records them.
 
-# Interface requirements for `x`
-- `similar(::X)->X`
-- `norm(::X)->Real`
-- general vector broadcasting rules
-
-# Interface requirements for `J`
-- `*(::J, ::X)->X`
-- `update!(::J)->J`
-
-To update the jacobian properly it is required that the object somehow has
-access to the current state of the proposed root `x`. This is most easily
-achieved by having `x` be one of the fields of the jacobian type. See
-[`JacobianAD`](@ref) and [`JacobianFD`](@ref) for examples of such an
-implementation.
+The vectors must broadcast and support `similar`, `dot` and `norm`.
 """
-function nkroot!(F, J, x, opts::Options=Options(); callback=nothing)
-    # correction
-    dx = similar(x)
+function nkroot!(F!, J, x; precond=nothing,
+                           flexible::Bool=false,
+                           krylov_dim::Int=50,
+                           krylov_tol::Real=1e-3,
+                           Δ::Real=1e-2,
+                           Δmax::Real=Inf,
+                           eta::Real=1e-3,
+                           maxiter::Int=20,
+                           tol::Real=1e-10,
+                           trust::Symbol=:ratio,
+                           verbose::Bool=true,
+                           io::IO=stdout,
+                           callback=info -> false)
 
-    # residual
-    r = F(similar(x), x)
+    # ---- input checks ----
+    trust in (:ratio, :scan) ||
+        throw(ArgumentError("trust must be :ratio or :scan"))
 
-    # maybe new solution and maybe new residual
-    xx = similar(x)
-    rr = similar(x)
+    # ---- evaluations, counted ----
+    counts         = [0, 0, 0] # residuals, Jacobian products, preconditioner applications
+    residual!(o, v)     = (counts[1] += 1; F!(o, v))
+    product!(o, v)      = (counts[2] += 1; mul!(o, J, v))
+    precondition!(o, v) = (counts[3] += 1; ldiv!(o, precond, v))
+    evaluations()       = (residuals=counts[1], products=counts[2], preconditioner=counts[3])
 
-    # precompute residual norm
-    r_norm  = norm(r)
+    # ---- workspace ----
+    r  = residual!(similar(x), x) # residual at x
+    rn = similar(x)        # residual at the trial point
+    b  = similar(x)        # right-hand side of (1)
+    z  = similar(x)        # preconditioned step Qₙ y
+    w  = similar(x)        # M⁻¹ v inside the Arnoldi operator
+    δx = similar(x)        # step
+    xn = similar(x)        # trial point x + δx
+    xb = similar(x)        # best trial point of a scan
+    rb = similar(x)        # and its residual
+    ϵ  = 100 * eps(Float64) # relative size of the eigenvalues of the Gram matrix set by rounding
 
-    # initialise trust region
-    Δ = opts.Δ_init
+    res    = norm(r)
+    status = :maxiter
+    iter   = 0
 
-    # initialize status
-    status       = :maxiter_reached
-    it           = opts.maxiter
-    gmres_maxit  = 0
-    gmres_minres = 1.0
+    verbose && _print_header(io)
+    verbose && _print_row(io, 0, res, Δ, NaN, 0, NaN, "", 0)
+    stop = callback((; iter, x, res, evaluations=evaluations(), krylov=Float64[], step="", radius=Δ, steplength=NaN,
+                       ratio=NaN, rejected=0, trials=Tuple{Float64, Float64}[]))
 
-    # print header and zero iteration
-    if opts.verbose
-        display_header()
-        display_status(   0,          0,            0,       0, Δ, 0, r_norm)
+    while iter < maxiter
+        stop && (status = :stopped; break)
+        res < tol && (status = :converged; break)
+        iter += 1
+
+        # ---- Newton system (1) at x ----
+        update!(J, x, r)
+        precond === nothing || update!(precond, x)
+        b .= .-r
+        β  = norm(b)
+
+        # ---- Krylov space of J M⁻¹, one Arnoldi step at a time ----
+        Z  = typeof(x)[]          # flexible: the vectors zⱼ = M⁻¹ qⱼ
+        Gz = Vector{Float64}[]    # flexible: their inner products ⟨zᵢ, zⱼ⟩, i ≤ j
+        A! = precond === nothing ? (out, v) -> product!(out, v) :
+             flexible            ? (out, v) -> _flexible!(out, product!, precondition!, v, Z, Gz) :
+                                   (out, v) -> product!(out, precondition!(w, v))
+        arn    = ArnoldiIteration(A!, copy(b))
+        g      = [β]
+        H      = arn.H
+        krylov = Float64[]                       # relative residual of the GMRES solution
+        qr     = (c=Float64[], s=Float64[], γ=[β]) # Givens QR of H, one column at a time
+
+        for _ in 1:(β > 0 ? krylov_dim : 0)
+            # one more basis vector, one more column of H, one more entry of g
+            _, H = step!(arn)
+            push!(g, 0.0)
+
+            # GMRES solution in the current space: stop once it solves the Newton system well enough
+            push!(krylov, _givens!(qr, H[:, end]) / β)
+            krylov[end] < krylov_tol && break
+
+            # breakdown: the new direction lies in the space, which no further step can enlarge
+            H[end, end] <= 1e-12 * β && break
+        end
+
+        # ---- the hookstep (3) in the final space, in the metric of the step ----
+        m      = size(H, 2)
+        Q      = view(arn.Q, 1:m)
+        G      = precond === nothing ? nothing :
+                 flexible            ? [Gz[max(i, j)][min(i, j)] for i in 1:m, j in 1:m] : gram(precond, Q)
+        precond === nothing || flexible || (counts[3] += _gram_applications(precond, m))
+        Rm, Ri = G === nothing ? (I, I) : _root(G, ϵ)
+        SH     = svd(H * Ri)
+        hook(ρ) = (h = _hookstep(SH, g, ρ); (Ri * h[1], h[2]))
+        len(y)  = norm(Rm * y)
+        move!(out, y) = precond === nothing ? lincomb!(out, Q, y) :
+                        flexible            ? lincomb!(out, Z, y) : precondition!(out, lincomb!(z, Q, y))
+
+        # a trial step of Krylov coordinates y: its point into xn, its residual into rn, the norm of the
+        # residual and the ratio of the actual to the predicted reduction of ‖r‖²
+        function trial!(xn, rn, y)
+            move!(δx, y)
+            xn  .= x .+ δx
+            resn = norm(residual!(rn, xn))
+            return resn, (res^2 - resn^2) / (β^2 - norm(g - H * y)^2)
+        end
+
+        # ---- trust region: the accepted trial, by the update rule of `trust` ----
+        Δmin = eps() * (1 + norm(x))
+        t    = trust === :ratio ? _ratio(trial!, hook, Δ, Δmax, eta, Δmin, xn, rn) :
+                                  _scan(trial!, hook, len, Δ, Δmax, eta, Δmin, xn, rn, xb, rb)
+        Δ    = t.Δ
+        t.accepted || (status = :collapsed; break)
+        x   .= t.x
+        r   .= t.r
+        res  = t.res
+        rejected = count(q -> !(q[2] > eta), t.trials)
+
+        # ---- output ----
+        kind = t.at ? "hook" : "newton"
+        verbose && _print_row(io, iter, res, Δ, t.ρ, m, krylov[end], kind, rejected)
+        stop = callback((; iter, x, res, evaluations=evaluations(), krylov, step=kind, radius=t.used,
+                           steplength=len(t.y), ratio=t.ρ, rejected, trials=t.trials))
     end
 
-    # execute callback if needed
-    if !isnothing(callback)
-        callback(0, x)
+    res < tol && (status = :converged)
+    verbose && status === :collapsed && println(io, "  trust region collapsed: no step in the Krylov space reduces ‖r‖")
+
+    return (; status, iter, res)
+end
+
+
+# ---------------------------------------------------------------------------- #
+# trust-region update rules                                                    #
+# ---------------------------------------------------------------------------- #
+# Each rule tries hooksteps in the Krylov space of one Newton system, by `trial!(xn, rn, y)`, which
+# writes the trial point and its residual and returns the norm of the residual and the ratio ρ,
+# until it accepts one. It returns the accepted trial: its coordinates `y`, whether it lies on the
+# boundary `at`, its ratio `ρ`, the radius `used` with which it was computed, the radius `Δ` of the
+# next iteration, its point `x`, residual `r` and residual norm `res`, and the radius and ratio of
+# every other trial; or `accepted = false` when the radius falls below `Δmin`.
+
+# trust=:ratio: from the ratio of each trial, Δ shrinks by 4 below 1/4 and doubles above 3/4 on the
+# boundary; the first trial with ρ > eta is accepted, the others give a shorter hookstep
+function _ratio(trial!, hook, Δ, Δmax, eta, Δmin, xn, rn)
+    trials = Tuple{Float64, Float64}[]
+    used   = Δ
+    y, at  = hook(Δ)
+    while true
+        res, ρ = trial!(xn, rn, y)
+
+        # radius update; a ratio that is not a number counts as a poor step
+        if !(ρ >= 1/4)
+            Δ /= 4
+        elseif ρ > 3/4 && at
+            Δ = min(2Δ, Δmax)
+        end
+
+        # accepted, or a shorter hookstep in the same space unless the region has collapsed
+        ρ > eta && return (accepted=true, y=y, at=at, ρ=ρ, used=used, Δ=Δ, x=xn, r=rn, res=res, trials=trials)
+        push!(trials, (used, ρ))
+        Δ < Δmin && return (accepted=false, y=y, at=at, ρ=ρ, used=used, Δ=Δ, x=xn, r=rn, res=res, trials=trials)
+        y, at = hook(Δ)
+        used  = Δ
     end
+end
 
-    for iter = 1:opts.maxiter
-        # set initial guess to zero
-        dx .= zero(dx)
-
-        # overwrites dx with solution
-        if opts.use_hookstep
-            _, gmres_r_norm, gmres_iter = gmres!(dx, J, r, Δ; rel_rtol=opts.gmres_rel_rtol,
-                                                               maxiter=opts.gmres_maxiter,
-                                                                     m=opts.gmres_m,
-                                                               verbose=opts.gmres_verbose)
-        else
-            _, gmres_r_norm, gmres_iter = gmres!(dx, J, r; rel_rtol=opts.gmres_rel_rtol,
-                                                            maxiter=opts.gmres_maxiter,
-                                                                  m=opts.gmres_m,
-                                                            verbose=opts.gmres_verbose)
+# trust=:scan: the hooksteps at the radii Δ p for the factors p of SCAN, capped by Δmax and by the
+# length of the GMRES step, which every larger radius gives; the trial of smallest residual among
+# those with ρ > eta is accepted, and the next radius is the length of its step. If none has
+# ρ > eta, the scan starts again below the smallest radius tried
+function _scan(trial!, hook, len, Δ, Δmax, eta, Δmin, xn, rn, xb, rb)
+    yN, _ = hook(Inf)
+    ℓN    = isfinite(len(yN)) ? len(yN) : Inf
+    tried = Tuple{Float64, Float64}[] # radius and ratio of every trial
+    while true
+        best = 0          # the best trial of this scan
+        resb = Inf        # its residual norm
+        yb   = yN         # its coordinates
+        atb  = false      # and whether it lies on the boundary
+        for ρr in unique(min.(Δ .* SCAN, Δmax, ℓN))
+            yr, at = hook(ρr)
+            res, q = trial!(xn, rn, yr)
+            push!(tried, (ρr, q))
+            if q > eta && res < resb
+                best = length(tried)
+                resb = res
+                yb   = yr
+                atb  = at
+                xb  .= xn
+                rb  .= rn
+            end
         end
 
-        # update GMRES status
-        gmres_maxit < gmres_iter ? gmres_maxit = gmres_iter : nothing
-        gmres_minres > gmres_r_norm ? gmres_minres = gmres_r_norm : nothing
-
-        # relative erro norm
-        gmres_rel_rnorm = gmres_r_norm/r_norm
-
-        # whether the correction is within the trust region boundary
-        hits_boundary = (dx_norm = norm(dx)) ≥ Δ
-
-        # determine step size
-        step = (dx_norm < Δ * (1 + 1e-6) && gmres_r_norm <= opts.gmres_rel_rtol) ? dx_norm : Δ
-
-        # new candidate solution. Note we used the positive residual for the linear system
-        xx .= x .- dx
-
-        # new residual
-        F(rr, xx)
-
-        # new residual norm
-        rr_norm = norm(rr)
-
-        # calculate ratio of actual and predicted reduction of residual norm
-        ρ = (r_norm^2 - rr_norm^2)/(r_norm^2 - gmres_r_norm.^2)
-
-        # trust region update
-        if ρ  < 1/4
-            Δ *= 1/4
-        elseif ρ > 3/4 && hits_boundary
-            Δ = min(2*Δ, opts.Δ_max)
-        end
-
-        # if there is some reduction
-        if ρ > opts.η
-            # update solution and residual
-            x .= xx
-            r .= rr
-
-            # update jacobian (which is hooked onto x)
-            update!(J)
-
-            # and residual norm, so we do not need to recompute it
-            r_norm = rr_norm
-        end
-
-        # display output
-        if opts.verbose && (iter % opts.skipiter == 0)
-            display_status(iter, gmres_iter, gmres_rel_rnorm, dx_norm, Δ, ρ, r_norm)
-        end
-
-        # execute callback if needed
-        if !isnothing(callback)
-            callback(iter, x)
-        end
-
-        # tolerances reached
-        if r_norm <  opts.r_norm_tol
-            status = :converged
-            it = iter
-            break
-        end
-        if dx_norm < opts.dx_norm_tol
-            status = :converged
-            it = iter
-            break
-        end
-        if step < opts.min_step
-            status = :min_step_reached
-            break
-        end
-
+        # the best trial, or a scan below the smallest radius tried unless the region has collapsed
+        best > 0 && return (accepted=true, y=yb, at=atb, ρ=tried[best][2], used=tried[best][1],
+                            Δ=min(len(yb), Δmax), x=xb, r=rb, res=resb, trials=tried[[1:best - 1; best + 1:end]])
+        Δ = minimum(first.(tried)) / 8
+        Δ < Δmin && return (accepted=false, y=yb, at=atb, ρ=NaN, used=Δ, Δ=Δ, x=xb, r=rb, res=resb, trials=tried)
     end
-
-    return status, it, r_norm, gmres_maxit, gmres_minres
 end
 
 """
-    nkroot!(F, x, opts=Options(); callback=nothing)
+    nkroot!(F!, x; jacobian=:fd, ϵ=1e-6, kwargs...)
 
-Root-finding method that generates a jacobian-vector product either from
-automatic differentiation or from finite-differencing.
+As `nkroot!(F!, J, x; kwargs...)` with the Jacobian by finite differences of `F!`
+(`jacobian=:fd`, step `ϵ`, see [`jacobianFD`](@ref)) or by dual numbers (`jacobian=:ad`).
 """
-function nkroot!(F, x, opts::Options=Options(); callback=nothing)
-    # construct jacobian
-    if opts.use_AD
-        jac = jacobianAD(F, x)
-    else
-        jac = jacobianFD(F, x, opts.ϵ)
-    end
+function nkroot!(F!, x; jacobian::Symbol=:fd, ϵ::Real=1e-6, kwargs...)
+    # ---- input checks ----
+    jacobian in (:fd, :ad) ||
+        throw(ArgumentError("jacobian must be :fd or :ad"))
 
-    # solve root with jacobian
-    return nkroot!(F, jac, x, opts, callback=callback)
+    J = jacobian === :fd ? jacobianFD(F!, x, ϵ) : jacobianAD(F!, x)
+    return nkroot!(F!, J, x; kwargs...)
 end
 
 
-# function for printing the iteration status
-function display_header()
-    header = "+-------+----------+----------------+----------+----------+-----------+----------+\n"*
-             "| iter  | gmres_it | gmres_res_norm |  ||dx||  |     Δ    |     ρ     |  ||r||   |\n"*
-             "+-------+----------+----------------+----------+----------+-----------+----------+"
-    println(header)
-    flush(stdout)
-    return nothing
+# ---------------------------------------------------------------------------- #
+# preconditioner                                                               #
+# ---------------------------------------------------------------------------- #
+
+"""
+    update!(J, x, r)
+    update!(M, x)
+
+Linearise the Jacobian `J` at `x`, with `r = F(x)`, and the preconditioner `M` at `x`. The
+defaults do nothing, for operators that do not depend on `x`.
+"""
+update!(J, x, r) = J
+update!(M, x)    = M
+
+"""
+    gram(M, Q) -> Matrix
+
+The Gram matrix `G[i, j] = dot(M⁻¹ Q[i], M⁻¹ Q[j])` of the orthonormal Krylov vectors `Q`, which
+gives the length of a step of the preconditioned hookstep. This default applies `M⁻¹` to each
+vector; a preconditioner can define a cheaper method.
+"""
+function gram(M, Q)
+    Z = [ldiv!(similar(q), M, q) for q in Q]
+    return [dot(Z[i], Z[j]) for i in eachindex(Z), j in eachindex(Z)]
 end
 
-function display_status(iter, gmres_iter, gmres_r_norm, dx_norm, Δ, ρ, r_norm)
-    str = @sprintf "|  %4d | %8d |   %6.4e   | %5.2e | %5.2e | %+5.2e | %5.2e |" iter gmres_iter gmres_r_norm dx_norm Δ ρ r_norm
-    println(str)
-    flush(stdout)
-    return nothing
+# the Arnoldi operator of flexible GMRES: z = M⁻¹ v is kept, with its inner products with the
+# vectors before it, and J z is written into out
+function _flexible!(out, product!, precondition!, v, Z, Gz)
+    zj = precondition!(similar(v), v)
+    push!(Z, zj)
+    push!(Gz, [dot(zi, zj) for zi in Z])
+    return product!(out, zj)
+end
+
+# the applications of M⁻¹ made by gram: m for the default, none for a preconditioner with its own
+_gram_applications(M, m) = which(gram, Tuple{typeof(M), Any}).module === NKRoots ? m : 0
+
+
+# ---------------------------------------------------------------------------- #
+# output                                                                       #
+# ---------------------------------------------------------------------------- #
+# radius: trust-region radius after the update; krylov: dimension of the Krylov space; linear:
+# relative residual of the GMRES solution of the Newton system; step: newton, the full step inside
+# the trust region, or hook, on its boundary; rejected: trial steps rejected before the accepted one
+_print_header(io::IO) =
+    println(io, "  iter      ‖r‖        radius       ρ      krylov    linear    step   rejected")
+
+function _print_row(io::IO, iter, res, Δ, ρ, k, lin, step, rejected)
+    @printf(io, "%6d  %.4e  %.3e  %8.3f  %6d  %.2e  %6s  %8s\n",
+            iter, res, Δ, ρ, k, lin, step, iter == 0 ? "" : string(rejected))
+    flush(io)
 end

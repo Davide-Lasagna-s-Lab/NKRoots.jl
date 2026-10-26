@@ -1,42 +1,42 @@
 export jacobianFD,
-       jacobianAD,
-       update!
+       jacobianAD
 
 using DualNumbers
- 
+
+# Object to compute the action of the jacobian of a function exactly, by dual numbers.
+# Assumes F obeys F(out, x) and overwrites `out` with F(x), returning out.
 struct JacobianAD{X, FT, TUP}
-    F::FT  # operator
-    x::X   # point at which the derivative is taken
-  tmp::TUP # temporaries with dual
+      F::FT  # operator
+      x::X   # point at which the derivative is taken
+    tmp::TUP # temporaries with dual
 end
 
 # outer constructor
-jacobianAD(F, x) = 
-    JacobianAD(F, x, (similar(x, Dual{eltype(x)}), similar(x, Dual{eltype(x)})))
+jacobianAD(F, x) =
+    JacobianAD(F, copy(x), (similar(x, Dual{eltype(x)}), similar(x, Dual{eltype(x)})))
 
-# does nothing
-update!(::JacobianAD) = nothing
+# linearise at x
+update!(J::JacobianAD, x, r) = (J.x .= x; J)
 
-# matrix vector product function required by GMRES
-function Base.:*(op::JacobianAD{X}, y::X) where {X}
-    # create output
-    out = similar(y)
-
+# jacobian-vector product
+function LinearAlgebra.mul!(out, op::JacobianAD, y)
     # aliases
      x_dual = op.tmp[1]
     Fx_dual = op.tmp[2]
 
     # perturbed input
     x_dual .= op.x .+ DualNumbers.ε .* y
-    
+
     # calculate function with perturbed input
     op.F(Fx_dual, x_dual)
 
-    # exact gradient 
+    # exact gradient
     out .= dualpart.(Fx_dual)
 
     return out
 end
+
+Base.:*(op::JacobianAD, y) = mul!(similar(y), op, y)
 
 # type interface to allow dispatch on method to determine FD step size
 abstract type EpsilonMethod end
@@ -56,45 +56,42 @@ struct JacobianFD{X, FT, STEP}
       ϵ::Float64     # finite difference step
 end
 
-# outer constructor
-jacobianFD(F, x, ϵ::Float64=1e-6; step_size::EpsilonMethod=Nitsol()) =
-    JacobianFD{typeof(x), typeof(F), typeof(step_size)}(F, x, F(similar(x), x), (similar(x), similar(x)), ϵ)
+"""
+    jacobianFD(F, x, ϵ=1e-6; step_size=Nitsol())
 
-# methods to compute FD step size (see page 363 of https://www.sciencedirect.com/science/article/pii/S0021999103004340)
+The Jacobian of `F` at `x` by a forward difference quotient, `J y ≈ (F(x + δ y) - F(x))/δ`,
+with δ from `step_size` (see page 363 of
+https://www.sciencedirect.com/science/article/pii/S0021999103004340). `update!(J, x, r)` moves it
+to `x`, with `r = F(x)`, without a new evaluation of `F`.
+"""
+jacobianFD(F, x, ϵ::Real=1e-6; step_size::EpsilonMethod=Nitsol()) =
+    JacobianFD{typeof(x), typeof(F), typeof(step_size)}(F, copy(x), F(similar(x), x), (similar(x), similar(x)), ϵ)
+
 _get_step(op::JacobianFD{<:Any, <:Any, Average}, y) = (1/(length(op.x)*norm(y)))*sum(op.ϵ.*abs.(op.x)) + op.ϵ
 _get_step(op::JacobianFD{<:Any, <:Any, Nitsol}, y) = sqrt((1 + norm(op.x))*eps(Float64))/norm(y)
 
-# update Fx assuming x has been modified outside
-function update!(j::JacobianFD{X}) where {X}
-    j.F(j.Fx, j.x)
-    return nothing
-end
+# linearise at x, with r = F(x)
+update!(J::JacobianFD, x, r) = (J.x .= x; J.Fx .= r; J)
 
-# matrix vector product function required by GMRES
-function Base.:*(op::JacobianFD{X, <:Any, STEP}, y::X) where {X, STEP}
-    # create output
-    out = similar(y)
-
+# jacobian-vector product
+function LinearAlgebra.mul!(out, op::JacobianFD, y)
     # aliases
      x_plus_y = op.tmp[1]
     Fx_plus_y = op.tmp[2]
-            x = op.x
-           Fx = op.Fx
-            δ = _get_step(op, y)
 
     # if perturbation is zero set output to zero
     if norm(y) == 0
         out .= zero(out)
-    else
-        # perturbed input
-        x_plus_y .= x .+ δ .* y
-        
-        # calculate function with perturbed input
-        op.F(Fx_plus_y, x_plus_y)
-
-        # calculate finite difference approximation of gradient 
-        out .= (Fx_plus_y .- Fx)./δ
+        return out
     end
+
+    # perturbed input, and the finite difference quotient
+    δ = _get_step(op, y)
+    x_plus_y .= op.x .+ δ .* y
+    op.F(Fx_plus_y, x_plus_y)
+    out .= (Fx_plus_y .- op.Fx) ./ δ
 
     return out
 end
+
+Base.:*(op::JacobianFD, y) = mul!(similar(y), op, y)
