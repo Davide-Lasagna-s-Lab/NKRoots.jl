@@ -74,6 +74,66 @@ end
     @test k[1] == 1
 end
 
+# a preconditioner that stretches the direction s by a factor a, as one that solves a slow
+# direction exactly: M⁻¹ = I + (a - 1) s sᵀ, with s of unit length
+struct StretchPrecond
+    s::Vector{Float64}
+    a::Float64
+end
+LinearAlgebra.ldiv!(out, M::StretchPrecond, v) = (out .= v .+ (M.a - 1) * dot(M.s, v) .* M.s; out)
+
+@testset "metric of the trust region               " begin
+    Random.seed!(2)
+    n = 50
+    m = 10
+
+    # ---- vectors of lengths that spread over eight orders of magnitude, along one shared
+    #      direction: the factor R of flexible GMRES keeps every short vector beside the long ones,
+    #      ‖R y‖ = ‖Z y‖ also for the steps off the long direction, and Z y = W R y ----
+    s = randn(n)
+    Z = [randn(n) .+ 1e8 .* s for _ in 1:m]
+
+    W  = Vector{Float64}[]
+    Rc = Vector{Float64}[]
+    for z in Z
+        NKRoots._flexible!(zeros(n), (o, v) -> o, (o, v) -> (o .= v), copy(z), W, Rc)
+    end
+    R      = UpperTriangular([i <= j ? Rc[j][i] : 0.0 for i in 1:m, j in 1:m])
+    Rm, Ri = NKRoots._root(R, 100 * eps())
+
+    y  = randn(m)
+    y0 = y .- sum(y) / m # no component along the long direction
+    @test size(Rm, 1) == m
+    @test abs(norm(Rm * y) - norm(sum(y .* Z))) / norm(sum(y .* Z)) < 1e-6
+    @test abs(norm(Rm * y0) - norm(sum(y0 .* Z))) / norm(sum(y0 .* Z)) < 1e-6
+    @test norm(Rm * Ri - I) < 1e-6
+    @test norm(NKRoots.lincomb!(zeros(n), W, R * y0) - sum(y0 .* Z)) < 1e-6 * norm(sum(y0 .* Z))
+
+    # ---- lengths from 1 to 10⁸ in independent directions: the Gram matrix of gram, scaled to unit
+    #      diagonal, keeps the short vectors ----
+    Z      = [10.0^(8 * (j - 1) / (m - 1)) .* randn(n) for j in 1:m]
+    G      = [dot(Z[i], Z[j]) for i in 1:m, j in 1:m]
+    Rm, Ri = NKRoots._root(Symmetric(G), 100 * eps())
+
+    y = randn(m) ./ norm.(Z) # every vector contributes alike
+    @test size(Rm, 1) == m
+    @test abs(norm(Rm * y) - norm(sum(y .* Z))) / norm(sum(y .* Z)) < 1e-6
+    @test norm(Rm * Ri - I) < 1e-6
+
+    # ---- one step of a linear problem from zero, with a preconditioner that stretches one
+    #      direction by 10⁸ and no trust region: with flexible GMRES the step is the GMRES solution,
+    #      which solves the problem to the precision that the stretch leaves (the steps restricted
+    #      by a Gram matrix of the vectors M⁻¹ qⱼ left a residual of 0.99) ----
+    A = Matrix(1.0I, n, n) + 0.3*randn(n, n)
+    c = randn(n)
+    F!(out, x) = (out .= A*x .- c; out)
+    M = StretchPrecond(normalize(randn(n)), 1e8)
+    x = zeros(n)
+    nkroot!(F!, A, x; precond=M, flexible=true, Δ=Inf, Δmax=Inf, maxiter=1, krylov_tol=1e-12,
+            krylov_dim=n, verbose=false)
+    @test norm(A*x - c) < 1e-4 * norm(c)
+end
+
 # the Jacobian of Broyden by finite differences, counting its products
 struct CountedJacobian{T}
           J::T        # finite-difference Jacobian

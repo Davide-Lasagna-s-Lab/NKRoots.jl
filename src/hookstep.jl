@@ -34,13 +34,42 @@ function _hookstep(SH::SVD, g::Vector, Δ::Real)
     return V * (p .* d ./ (d.^2 .+ hi)), true
 end
 
-# R and R⁻¹ with Rᵀ R = G, the Gram matrix of the steps of the Krylov coordinates, from its
-# eigenvalues, without the directions of eigenvalues below ϵ times the largest, which rounding
-# sets: there the steps depend on each other, and R⁻¹ maps the coordinates u of the kept
-# directions back to y. Then ‖R y‖ is the length of the step of y.
-function _root(G::AbstractMatrix, ϵ::Real)
-    λ, V = eigen(Symmetric(G))
+# R and R⁻¹ for the length of a step, ‖Zₙ y‖ = ‖R y‖ with Zₙ the vectors zⱼ = M⁻¹ qⱼ, without the
+# directions that rounding sets: there the zⱼ depend on each other, the hookstep would take long
+# steps for nothing, and R⁻¹ maps the coordinates u of the kept directions back to y. The columns
+# are scaled to unit length first, D the lengths of the zⱼ, so that the short vectors are kept
+# beside the long ones that a preconditioner stretches when it solves a few slow directions
+# exactly; a cut relative to the largest length would drop them, and with them the GMRES step.
+#
+# From R, upper triangular with Zₙ = Wₙ R (flexible): the SVD of R D⁻¹, without the singular values
+# below ϵ times the largest.
+function _root(R::UpperTriangular, ϵ::Real)
+    # ---- the lengths of the columns of R, those of the vectors zⱼ ----
+    D = [max(norm(view(R, :, j)), floatmin()) for j in axes(R, 2)]
+
+    # ---- the SVD of R D⁻¹, without the directions that rounding sets ----
+    _, s, V = svd(R ./ D')
+    keep    = s .> ϵ * maximum(s)
+    s       = s[keep]
+    V       = V[:, keep]
+
+    # ‖R y‖ = ‖diag(s) Vᵀ D y‖
+    return s .* V' .* D', (V ./ s') ./ D
+end
+
+# From the Gram matrix G = Rᵀ R (gram): the eigenvalues of D⁻¹ G D⁻¹, without those below ϵ times
+# the largest. A Gram matrix squares the condition of the vectors, so the directions along which
+# the zⱼ, scaled to unit length, depend on each other below √ϵ are lost; flexible GMRES keeps them.
+function _root(G::Symmetric, ϵ::Real)
+    # ---- the lengths of the vectors zⱼ ----
+    D = [sqrt(max(G[j, j], floatmin())) for j in axes(G, 2)]
+
+    # ---- the eigenvalues of D⁻¹ G D⁻¹, without the directions that rounding sets ----
+    λ, V = eigen(Symmetric(G ./ D ./ D'))
     keep = λ .> ϵ * maximum(λ)
     s    = sqrt.(λ[keep])
-    return s .* V[:, keep]', V[:, keep] ./ s'
+    V    = V[:, keep]
+
+    # ‖R y‖ = ‖diag(s) Vᵀ D y‖
+    return s .* V' .* D', (V ./ s') ./ D
 end

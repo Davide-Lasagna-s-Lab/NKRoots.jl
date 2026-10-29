@@ -27,10 +27,14 @@
 # is δx = M⁻¹ Qₙ y: the residual of the model is unchanged, and so is the meaning of `krylov_tol`.
 # The trust region still bounds the step δx, not its Krylov coordinates: ‖δx‖ = ‖R y‖ with
 # Rᵀ R = G the Gram matrix of the vectors zⱼ = M⁻¹ qⱼ, and (3) keeps its form in u = R y with
-# H R⁻¹ in place of H. With `flexible=true` the zⱼ are kept as the Arnoldi iteration computes
-# them, the step is Zₙ y and G their inner products (flexible GMRES, Saad 1993, which also allows
-# a preconditioner that changes between Arnoldi steps). Otherwise G comes from `gram(M, Qₙ)`,
-# which a preconditioner can compute cheaply, and the step is M⁻¹ (Qₙ y).
+# H R⁻¹ in place of H. With `flexible=true` the zⱼ come from the Arnoldi iteration (flexible GMRES,
+# Saad 1993, which also allows a preconditioner that changes between Arnoldi steps) and are
+# orthonormalised as they come, Zₙ = Wₙ R with Wₙ orthonormal and R upper triangular: the step is
+# Wₙ R y, and R keeps the precision of the zⱼ however their lengths spread. Otherwise G comes from
+# `gram(M, Qₙ)`, which a preconditioner can compute cheaply, and the step is M⁻¹ (Qₙ y). A Gram
+# matrix squares the spread of the lengths, wide when M⁻¹ solves a few slow directions exactly; it
+# is scaled to unit diagonal before its root is taken, but some directions are still lost
+# (hookstep.jl), and `flexible=true` keeps them.
 #
 # Trust-region update. The model predicts the reduction β² - ‖g - H y‖² of ‖r‖², and the step is
 # judged by the ratio ρ of the actual reduction to the predicted one.
@@ -62,8 +66,10 @@ Solve `F(x) = 0` by the Newton–Krylov hookstep from the guess `x`, overwritten
   linearises it at `x` with the Jacobian, and `gram(M, Q)`, the Gram matrix of the vectors
   `M⁻¹ Q[j]`, gives the length of a step (the default applies `M⁻¹` to each). The trust region
   bounds the step in `x`, with or without preconditioner.
-- `flexible=true` keeps the vectors `M⁻¹ qⱼ` of the Arnoldi iteration: the step and its length
-  come from them, at the cost of one more vector per Krylov dimension and with no `gram`.
+- `flexible=true` keeps the vectors `M⁻¹ qⱼ` of the Arnoldi iteration, orthonormalised: the step
+  and its length come from them, at the cost of one more vector per Krylov dimension and with no
+  `gram`. Use it with a preconditioner that solves a few directions exactly, which stretches some
+  `M⁻¹ qⱼ` far beyond the others: a Gram matrix loses the short ones.
 - `krylov_dim`, `krylov_tol`: largest dimension of the Krylov space, and relative residual of the
   GMRES solution of the Newton system at which it stops growing.
 - `Δ`, `Δmax`: initial and largest trust-region radius. `eta`: smallest ratio of the actual to
@@ -115,7 +121,7 @@ function nkroot!(F!, J, x; precond=nothing,
     xn = similar(x)        # trial point x + δx
     xb = similar(x)        # best trial point of a scan
     rb = similar(x)        # and its residual
-    ϵ  = 100 * eps(Float64) # relative size of the eigenvalues of the Gram matrix set by rounding
+    ϵ  = 100 * eps(Float64) # relative singular value of R, or eigenvalue of G, set by rounding
 
     res    = norm(r)
     status = :maxiter
@@ -138,10 +144,10 @@ function nkroot!(F!, J, x; precond=nothing,
         β  = norm(b)
 
         # ---- Krylov space of J M⁻¹, one Arnoldi step at a time ----
-        Z  = typeof(x)[]          # flexible: the vectors zⱼ = M⁻¹ qⱼ
-        Gz = Vector{Float64}[]    # flexible: their inner products ⟨zᵢ, zⱼ⟩, i ≤ j
+        W  = typeof(x)[]          # flexible: the vectors zⱼ = M⁻¹ qⱼ orthonormalised, Zₙ = Wₙ R
+        Rc = Vector{Float64}[]    # flexible: the columns of R, upper triangular
         A! = precond === nothing ? (out, v) -> product!(out, v) :
-             flexible            ? (out, v) -> _flexible!(out, product!, precondition!, v, Z, Gz) :
+             flexible            ? (out, v) -> _flexible!(out, product!, precondition!, v, W, Rc) :
                                    (out, v) -> product!(out, precondition!(w, v))
         arn    = ArnoldiIteration(A!, copy(b))
         g      = [β]
@@ -165,15 +171,16 @@ function nkroot!(F!, J, x; precond=nothing,
         # ---- the hookstep (3) in the final space, in the metric of the step ----
         m      = size(H, 2)
         Q      = view(arn.Q, 1:m)
-        G      = precond === nothing ? nothing :
-                 flexible            ? [Gz[max(i, j)][min(i, j)] for i in 1:m, j in 1:m] : gram(precond, Q)
+        R      = precond === nothing || !flexible ? nothing :
+                 UpperTriangular([i <= j ? Rc[j][i] : 0.0 for i in 1:m, j in 1:m])
+        Rm, Ri = precond === nothing ? (I, I) :
+                 flexible            ? _root(R, ϵ) : _root(Symmetric(gram(precond, Q)), ϵ)
         precond === nothing || flexible || (counts[3] += _gram_applications(precond, m))
-        Rm, Ri = G === nothing ? (I, I) : _root(G, ϵ)
         SH     = svd(H * Ri)
         hook(ρ) = (h = _hookstep(SH, g, ρ); (Ri * h[1], h[2]))
         len(y)  = norm(Rm * y)
         move!(out, y) = precond === nothing ? lincomb!(out, Q, y) :
-                        flexible            ? lincomb!(out, Z, y) : precondition!(out, lincomb!(z, Q, y))
+                        flexible            ? lincomb!(out, W, R * y) : precondition!(out, lincomb!(z, Q, y))
 
         # a trial step of Krylov coordinates y: its point into xn, its residual into rn, the norm of the
         # residual and the ratio of the actual to the predicted reduction of ‖r‖²
@@ -314,20 +321,35 @@ update!(M, x)    = M
 
 The Gram matrix `G[i, j] = dot(M⁻¹ Q[i], M⁻¹ Q[j])` of the orthonormal Krylov vectors `Q`, which
 gives the length of a step of the preconditioned hookstep. This default applies `M⁻¹` to each
-vector; a preconditioner can define a cheaper method.
+vector; a preconditioner can define a cheaper method. Not used with `flexible=true`, which keeps
+the short vectors that a Gram matrix loses when `M⁻¹` stretches a few directions far.
 """
 function gram(M, Q)
     Z = [ldiv!(similar(q), M, q) for q in Q]
     return [dot(Z[i], Z[j]) for i in eachindex(Z), j in eachindex(Z)]
 end
 
-# the Arnoldi operator of flexible GMRES: z = M⁻¹ v is kept, with its inner products with the
-# vectors before it, and J z is written into out
-function _flexible!(out, product!, precondition!, v, Z, Gz)
-    zj = precondition!(similar(v), v)
-    push!(Z, zj)
-    push!(Gz, [dot(zi, zj) for zi in Z])
-    return product!(out, zj)
+# The Arnoldi operator of flexible GMRES: J z into out, with z = M⁻¹ v. Then z, orthonormalised
+# against the vectors before it, goes into W, and its coordinates on them, a column of R, into Rc,
+# so that Zₙ = Wₙ R. Gram-Schmidt is applied twice, so that R keeps the precision of the vectors
+# when their lengths spread over orders of magnitude, as they do when M⁻¹ solves a few slow
+# directions exactly: their inner products would square that spread, and the short vectors would
+# fall below rounding. W replaces the vectors zⱼ, with no extra storage
+function _flexible!(out, product!, precondition!, v, W, Rc)
+    # ---- z = M⁻¹ v, and J z ----
+    z = precondition!(similar(v), v)
+    product!(out, z)
+
+    # ---- z orthogonalised against W in place, twice, and normalised ----
+    c = zeros(length(W) + 1)
+    _orthogonalise!(z, W, view(c, 1:length(W)))
+    c[end] = norm(z)
+    c[end] > 0 && (z ./= c[end])
+
+    push!(W, z)
+    push!(Rc, c)
+
+    return out
 end
 
 # the applications of M⁻¹ made by gram: m for the default, none for a preconditioner with its own
