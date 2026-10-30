@@ -82,6 +82,13 @@ struct StretchPrecond
 end
 LinearAlgebra.ldiv!(out, M::StretchPrecond, v) = (out .= v .+ (M.a - 1) * dot(M.s, v) .* M.s; out)
 
+# the same, with the root of the Gram matrix from the vectors, for the path of gram without flexible
+struct StretchRoot
+    M::StretchPrecond
+end
+LinearAlgebra.ldiv!(out, M::StretchRoot, v) = ldiv!(out, M.M, v)
+NKRoots.gram(M::StretchRoot, Q) = UpperTriangular(qr(reduce(hcat, [ldiv!(similar(q), M, q) for q in Q])).R)
+
 @testset "metric of the trust region               " begin
     Random.seed!(2)
     n = 50
@@ -130,6 +137,12 @@ LinearAlgebra.ldiv!(out, M::StretchPrecond, v) = (out .= v .+ (M.a - 1) * dot(M.
     M = StretchPrecond(normalize(randn(n)), 1e8)
     x = zeros(n)
     nkroot!(F!, A, x; precond=M, flexible=true, Δ=Inf, Δmax=Inf, maxiter=1, krylov_tol=1e-12,
+            krylov_dim=n, verbose=false)
+    @test norm(A*x - c) < 1e-4 * norm(c)
+
+    # ---- the same with the root of the Gram matrix from gram, which loses nothing either ----
+    x = zeros(n)
+    nkroot!(F!, A, x; precond=StretchRoot(M), Δ=Inf, Δmax=Inf, maxiter=1, krylov_tol=1e-12,
             krylov_dim=n, verbose=false)
     @test norm(A*x - c) < 1e-4 * norm(c)
 end
