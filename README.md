@@ -82,7 +82,7 @@ Each row of the output is one Newton step, and the last line says how the search
 | `iter` | the Newton step |
 | `‖F‖` | the norm of the residual |
 | `Δ` | the radius of the trust region for the next step |
-| `ρ` | the actual reduction of $\|F\|^2$ over the one the linear model predicted |
+| `ρ` | the actual reduction of ‖F‖² over the one the linear model predicted |
 | `dim K` | the dimension of the Krylov space |
 | `‖Jδ+F‖/‖F‖` | how well GMRES solved the Newton system $J\delta = -F$ |
 | `step` | `↪ hook` on the boundary of the trust region, `→ newton` the full step inside it |
@@ -369,7 +369,7 @@ $$\tilde S = \Big|\frac{dU}{dy}\Big| + \frac{\tilde\nu}{\kappa^2y^2}f_{v2}, \qqu
 
 $$f_w = g\Big(\frac{1 + c_{w3}^6}{g^6 + c_{w3}^6}\Big)^{1/6}, \qquad g = r + c_{w2}(r^6 - r), \qquad r = \min\Big(\frac{\tilde\nu}{\tilde S\kappa^2y^2}, 10\Big),$$
 
-with $\tilde S$ kept above $0.3\,|dU/dy|$, the usual limiter, and no trip terms. The constants are
+with $\tilde S$ kept above $0.3\,|dU/dy|$, and no trip terms. The constants are
 $c_{b1} = 0.1355$, $c_{b2} = 0.622$, $\sigma = 2/3$, $\kappa = 0.41$, $c_{w1} = c_{b1}/\kappa^2 + (1 + c_{b2})/\sigma$,
 $c_{w2} = 0.3$, $c_{w3} = 2$ and $c_{v1} = 7.1$.
 
@@ -429,7 +429,7 @@ continuation, from the solution at 550 to the one at 1000.
 
 | preconditioner | Jacobian products | outcome |
 |---|---:|---|
-| none | 12000 | $\|F\| = 1.2$ after 40 steps |
+| none | 12000 | ‖F‖ = 1.2 after 40 steps |
 | the Laplacian `ν D₂` on both fields, factorised once | 1909 | converged in 29 steps |
 | the diffusion, factorised at each step | 385 | converged in 28 steps |
 
@@ -455,26 +455,185 @@ Script: [`examples/spalart_allmaras.jl`](examples/spalart_allmaras.jl).
 
 ## How it works
 
-Newton's method solves $J\,\delta x = -r$ with $r = F(x)$. Far from a root the full step is unreliable,
-so the step is restricted to a region where the linear model is trusted,
+We look for $x \in \mathbb{R}^N$ with $F(x) = 0$. The figure shows one Newton step. The Krylov space is
+built once, at one product with the Jacobian per vector. The trust region then tries steps inside
+that space, at one residual per trial. The rest is dense algebra on a small matrix. This division of
+the work is the point of the method.
 
-$$\min_{\delta x} \|r + J\,\delta x\| \quad \text{subject to} \quad \|\delta x\| \le \Delta.$$
+![One Newton step](assets/newton_step.svg)
 
-The Arnoldi iteration builds an orthonormal basis $Q_n$ of the Krylov space from $-r$, with
-$J Q_n = Q_{n+1} H$. For $\delta x = Q_n y$ the problem becomes
+### The linear model
 
-$$\min_{y} \|\beta e_1 - H y\| \quad \text{subject to} \quad \|y\| \le \Delta,$$
+At a point $x$ with residual $r = F(x)$ and Jacobian $J$, the residual near $x$ is modelled by
 
-which the SVD of $H$ solves. The Krylov space stops growing when the GMRES residual falls below
-`krylov_tol`, or at `krylov_dim`.
+$$F(x + \delta) \approx r + J\delta.$$
 
-With a right preconditioner the Arnoldi iteration runs on $J M^{-1}$ and the step is
-$\delta x = M^{-1} Q_n y$. The trust region still bounds $\delta x$, not $y$. Its metric comes from
-the vectors $M^{-1} q_j$, kept by flexible GMRES, or from `gram(M, Q)`, which a preconditioner can
-compute cheaply.
+Newton's method makes the model vanish, $J\delta = -r$. Two things stand in the way. For a large
+system $J$ cannot be stored or factorised. Far from a root the solution of the model is a poor step,
+as [the hookstep example](#the-hookstep) shows. The Krylov space answers the first and the trust
+region the second.
 
-The ratio $\rho$ of the actual to the predicted reduction of $\|r\|^2$ judges each trial. A poor trial
-gives a shorter hookstep in the same Krylov space, with no new products with $J$.
+### From the system to the Krylov space
+
+Let $\beta = \|r\|$ and $q_1 = -r/\beta$. The Arnoldi iteration builds an orthonormal basis
+$Q_n = [q_1, \dots, q_n]$ of the space spanned by $r, Jr, \dots, J^{n-1}r$. Each new vector takes one
+product with $J$. The coefficients of the orthonormalisation form the $(n + 1) \times n$ upper
+Hessenberg matrix $H$, with
+
+$$J Q_n = Q_{n+1} H.$$
+
+Take a step in this space, $\delta = Q_n y$. The residual of the model is
+
+$$r + J\delta = -\beta q_1 + Q_{n+1} H y = Q_{n+1}(Hy - \beta e_1),$$
+
+and because the columns of $Q_{n+1}$ are orthonormal,
+
+$$\|r + J\delta\| = \|\beta e_1 - Hy\|, \qquad \|\delta\| = \|y\|.$$
+
+A problem of size $N$ has become a problem of size $n$. GMRES is its minimum with no constraint on
+$y$. A Givens rotation of the new column of $H$ updates the residual of GMRES at every Arnoldi step,
+with no operation on vectors. That residual is the column `‖Jδ+F‖/‖F‖` of the output. The space stops
+growing when it falls below `krylov_tol`, at `krylov_dim`, or at a breakdown, when the new vector
+vanishes because the space is invariant. Two passes of modified Gram–Schmidt keep $Q_n$ orthonormal
+to rounding.
+
+### The constrained step
+
+The trust region asks for the best step of length at most $\Delta$,
+
+$$\min_y \|\beta e_1 - Hy\| \quad \text{subject to} \quad \|y\| \le \Delta.$$
+
+The singular value decomposition $H = U D V^{\mathsf T}$ decouples it. With $p = \beta U^{\mathsf T} e_1$
+and $s = V^{\mathsf T} y$, we minimise $\sum_i (p_i - d_i s_i)^2$ subject to $\sum_i s_i^2 \le \Delta^2$.
+A Lagrange multiplier $\mu \ge 0$ on the constraint gives, direction by direction,
+
+$$s_i(\mu) = \frac{d_i\, p_i}{d_i^2 + \mu} = \frac{d_i^2}{d_i^2 + \mu}\;\frac{p_i}{d_i}.$$
+
+This is the Levenberg–Marquardt step on the small problem, $(H^{\mathsf T}H + \mu I)\,y = \beta H^{\mathsf T}e_1$.
+There are two cases.
+
+- The GMRES step, $\mu = 0$, lies inside the region. It is the answer, `→ newton`.
+- Otherwise $\mu$ solves $\|s(\mu)\| = \Delta$, `↪ hook`. The length $\|s(\mu)\|$ falls monotonically
+  with $\mu$, so the root is unique. The bound $\|s(\mu)\| \le \|p\| \max_i d_i / \mu$ brackets it,
+  and bisection finds it.
+
+The second form of $s_i$ says what the multiplier does. The ratio $p_i/d_i$ is the component of the
+GMRES step along direction $i$, and the factor before it is a filter. The filter is close to one for
+singular values above $\sqrt\mu$ and falls to zero below. A small singular value is a direction in
+which $J$ nearly vanishes, and there the GMRES step is long. Those are the components the trust
+region removes. The figure shows this on the first Newton system of the
+[Bratu problem](#the-bratu-problem), with a radius of one quarter of the GMRES step.
+
+![The hookstep on real numbers](examples/figures/how_it_works.png)
+
+On the left, one singular direction carries nearly all of the GMRES step. In the middle, the
+multiplier $\mu_\star$ of this radius keeps one quarter of that direction and all of the others. On
+the right, $\mu_\star$ is the root of $\|s(\mu)\| = \Delta$. The script is
+[`examples/how_it_works.jl`](examples/how_it_works.jl).
+
+The two limits fix the shape of the path. As $\Delta \to 0$, $\mu \to \infty$ and
+$y \propto \beta H^{\mathsf T} e_1$, which is the direction of steepest descent of $\|r + J\delta\|^2$ in the
+Krylov space. As $\Delta$ grows, the step turns towards the Newton step. The end of the step traces
+the curve of [the hookstep example](#the-hookstep).
+
+### The ratio and the radius
+
+A step is judged on the true residual. The model predicts one reduction of the squared residual, and
+the trial gives another,
+
+$$\text{predicted} = \beta^2 - \|\beta e_1 - Hy\|^2, \qquad \text{actual} = \|r\|^2 - \|F(x + \delta)\|^2, \qquad \rho = \frac{\text{actual}}{\text{predicted}}.$$
+
+A ratio near one says that the model holds at this distance. With `trust=:ratio` the search reads
+this table after each trial.
+
+| ratio | the step | the radius |
+|---|---|---|
+| ρ ≤ `eta` | rejected | Δ/4 |
+| `eta` < ρ < 1/4 | accepted | Δ/4 |
+| 1/4 ≤ ρ ≤ 3/4 | accepted | unchanged |
+| ρ > 3/4, on the boundary | accepted | min(2Δ, `Δmax`) |
+| ρ > 3/4, inside | accepted | unchanged |
+
+A rejected trial needs a new $\mu$ and one residual. It needs no product with $J$, because $H$ and its
+decomposition stay valid. If the radius falls to the rounding of $x$, the search stops as
+`:collapsed`. This happens in a valley with no root. There $J^{\mathsf T} r = 0$, so no step along
+the model lowers $\|F\|$.
+
+With `trust=:scan` the same space is used differently. The hooksteps at the radii $\Delta p$, with
+$p = 1/8$ to $4$ in steps of $\sqrt 2$, are all tried, capped by `Δmax` and by the length of the GMRES
+step. Among those with ρ > `eta` the search keeps the one of smallest residual, and the next radius
+is the length of that step. A scan costs up to eleven residuals and no more products.
+
+### How well to solve the Newton system
+
+The Krylov space stops on the residual of GMRES, not on that of the hookstep. On the boundary of the
+trust region the residual of the hookstep stalls at a level set by Δ, which no larger space can
+lower. So the test is on the unconstrained problem. It says that the space is good enough to hold
+the step.
+
+Near the root the steps are full GMRES steps, and the search is an inexact Newton method,
+$\|r + J\delta\| \le \eta\,\|r\|$ with $\eta$ = `krylov_tol`. The next residual then has two parts,
+
+$$\|F(x + \delta)\| \lesssim \eta\,\|r\| + C\,\|r\|^2.$$
+
+While $\|r\|$ is large the second part dominates, and the convergence looks quadratic. Close to the
+root the first part takes over, and the convergence is linear at the rate $\eta$. A loose tolerance
+gives cheap steps and an early linear phase, and a tight one the reverse, as
+[the Krylov example](#the-krylov-space) shows.
+
+### Right preconditioning
+
+GMRES needs many products when the spectrum of $J$ is spread. A preconditioner $M \approx J$ with a
+cheap $M^{-1}$ gathers it. With right preconditioning the Arnoldi iteration runs on $J M^{-1}$,
+
+$$J M^{-1} Q_n = Q_{n+1} H, \qquad \delta = M^{-1} Q_n y.$$
+
+The residual of the model is unchanged,
+
+$$r + J\delta = Q_{n+1}(Hy - \beta e_1),$$
+
+so `krylov_tol` keeps its meaning. What changes is the length of the step. With $Z = M^{-1} Q_n$,
+
+$$\|\delta\| = \|Z y\| \ne \|y\|.$$
+
+A bound on $\|y\|$ would be a bound on $\|M\delta\|$. That quantity is small exactly in the directions
+where $M^{-1}$ is large, which are the directions where the step must be restrained. So the trust
+region stays on $\delta$. Write $Z = W R$, with $W$ orthonormal and $R$ upper triangular, so that
+$\|\delta\| = \|R y\|$. In the variable $u = R y$ the problem is
+
+$$\min_u \|\beta e_1 - H R^{-1} u\| \quad \text{subject to} \quad \|u\| \le \Delta,$$
+
+the same hookstep, with $H R^{-1}$ in place of $H$. There are two ways to get $R$.
+
+- With `flexible=true`, flexible GMRES keeps the vectors $z_j = M^{-1} q_j$ and orthonormalises them
+  as they come. $R$ holds the coefficients. It keeps the precision of the $z_j$ however far their
+  lengths spread, and $M$ may even change between Arnoldi steps. The price is one more vector per
+  Arnoldi step.
+- By default, `gram(M, Q)` returns $G = Z^{\mathsf T} Z = R^{\mathsf T} R$, which a preconditioner can
+  often compute cheaply. A Gram matrix squares the spread of the lengths. Directions that depend on
+  each other below the square root of the machine precision are lost, and with them part of the
+  step.
+
+Use `flexible=true` when $M$ solves a few directions exactly, as
+[this example](#preconditioners) shows. Both ways scale the vectors to unit length and drop the
+directions that rounding sets.
+
+### What it costs
+
+One Newton step with $n$ Arnoldi steps and $t$ trials costs the following.
+
+| | default | `flexible=true` |
+|---|---:|---:|
+| products with $J$ | $n$ | $n$ |
+| residuals | $t$ | $t$ |
+| applications of $M^{-1}$ | $2n + t$ | $n$ |
+| inner products | $n(n + 1)$ | about $2n^2$ |
+| vectors stored | $n + 1$ | $2n + 1$ |
+
+A finite-difference Jacobian adds one residual per product. A `gram` of your own removes the $n$
+applications it would otherwise need. The singular value decomposition acts on a matrix of size
+$n$ and touches no vector. The inner products grow as $n^2$, so a good preconditioner saves twice,
+in the products and in the orthonormalisation.
 
 ## Keywords
 
@@ -510,10 +669,92 @@ group per section. The summary lists each claim by name.
 
 ## References
 
-- D. Viswanath, *Recurrent motions within plane Couette turbulence*, J. Fluid Mech. 580 (2007).
-  [arXiv:physics/0604062](https://arxiv.org/abs/physics/0604062).
-- D. Viswanath, *The critical layer in pipe flow at high Reynolds number*, Phil. Trans. R. Soc. A
-  367 (2009). [arXiv:0809.1498](https://arxiv.org/abs/0809.1498).
-- Y. Saad, *A flexible inner-outer preconditioned GMRES algorithm*, SIAM J. Sci. Comput. 14 (1993).
-- P. R. Spalart and S. R. Allmaras, *A one-equation turbulence model for aerodynamic flows*, La
-  Recherche Aérospatiale 1 (1994).
+### Where the ideas come from
+
+**Newton–Krylov.** The Arnoldi iteration [1] builds the orthonormal basis, and GMRES [2] minimises the
+residual over it. Brown and Saad [3] study such solvers inside Newton's method, with products in
+place of the Jacobian. Their later paper [4] gives the theory for global strategies, line searches
+and model trust regions. Knoll and Keyes [5] survey the approach, and Kelley [6] is the practical
+book. Dembo, Eisenstat and Steihaug [7] analyse how inexactly the Newton systems can be solved.
+Eisenstat and Walker [8] vary the tolerance from step to step, and this package keeps it constant.
+
+**The trust region.** Levenberg [9] and Marquardt [10] added the multiplier $\mu$ to the least-squares
+problem. Moré [11] gives its implementation and theory, and Moré and Sorensen [12] compute the
+constrained step. Dennis and Schnabel [13] call it the hook step. Conn, Gould and Toint [14] is the
+reference book. The rule `trust=:ratio` is the classical one, as in Algorithm 4.1 of Nocedal and
+Wright [15].
+
+**The hookstep in a Krylov space.** Brown and Saad [3] pose the model trust region problem in a Krylov
+space, and work with the dogleg, an approximation of the hookstep. Viswanath [16] computes the
+hookstep itself in a Krylov space, to find periodic orbits of plane Couette flow, a problem where he
+finds that damped Newton steps fail. His later paper [17], in its section 5, gives the method in
+detail, with the formula for $s_i(\mu)$ above and the stop on the residual of GMRES. He notes that no
+theory supports this stop, and that it works very well in practice. This package follows that recipe,
+and its code follows the `NewtonHookstep` of
+[ReSolver.jl](https://github.com/Davide-Lasagna-s-Lab/ReSolver.jl).
+
+**Preconditioning.** Flexible GMRES is due to Saad [18], who uses it for a preconditioner that changes
+from step to step. Here it also gives the metric of the step, as derived above.
+
+**The details.** Two passes of orthogonalisation are enough, as Giraud et al. [19] analyse for the
+classical process. The default step of the finite difference is that of NITSOL [20]. The relative step
+$\epsilon$ is the formula given by Knoll and Keyes [5]. Dual numbers are the forward mode of automatic
+differentiation [21].
+
+**The examples.** The closed form of the Bratu problem is quoted from Ascher, Mattheij and Russell [22],
+and Boyd [23] studies the problem in two dimensions. The turbulence model is that of Spalart and
+Allmaras [24].
+
+### List
+
+1. W. E. Arnoldi, *The principle of minimized iterations in the solution of the matrix eigenvalue
+   problem*, Q. Appl. Math. 9 (1951) 17–29. [doi](https://doi.org/10.1090/qam/42792)
+2. Y. Saad and M. H. Schultz, *GMRES: a generalized minimal residual algorithm for solving nonsymmetric
+   linear systems*, SIAM J. Sci. Stat. Comput. 7 (1986) 856–869. [doi](https://doi.org/10.1137/0907058)
+3. P. N. Brown and Y. Saad, *Hybrid Krylov methods for nonlinear systems of equations*, SIAM J. Sci.
+   Stat. Comput. 11 (1990) 450–481. [doi](https://doi.org/10.1137/0911026)
+4. P. N. Brown and Y. Saad, *Convergence theory of nonlinear Newton–Krylov algorithms*, SIAM J. Optim.
+   4 (1994) 297–330. [doi](https://doi.org/10.1137/0804017)
+5. D. A. Knoll and D. E. Keyes, *Jacobian-free Newton–Krylov methods: a survey of approaches and
+   applications*, J. Comput. Phys. 193 (2004) 357–397. [doi](https://doi.org/10.1016/j.jcp.2003.08.010)
+6. C. T. Kelley, *Solving Nonlinear Equations with Newton's Method*, SIAM (2003).
+   [doi](https://doi.org/10.1137/1.9780898718898)
+7. R. S. Dembo, S. C. Eisenstat and T. Steihaug, *Inexact Newton methods*, SIAM J. Numer. Anal. 19
+   (1982) 400–408. [doi](https://doi.org/10.1137/0719025)
+8. S. C. Eisenstat and H. F. Walker, *Choosing the forcing terms in an inexact Newton method*, SIAM J.
+   Sci. Comput. 17 (1996) 16–32. [doi](https://doi.org/10.1137/0917003)
+9. K. Levenberg, *A method for the solution of certain non-linear problems in least squares*, Q. Appl.
+   Math. 2 (1944) 164–168. [doi](https://doi.org/10.1090/qam/10666)
+10. D. W. Marquardt, *An algorithm for least-squares estimation of nonlinear parameters*, J. SIAM 11
+    (1963) 431–441. [doi](https://doi.org/10.1137/0111030)
+11. J. J. Moré, *The Levenberg–Marquardt algorithm: implementation and theory*, Lecture Notes in
+    Mathematics 630 (1978) 105–116. [doi](https://doi.org/10.1007/BFb0067700)
+12. J. J. Moré and D. C. Sorensen, *Computing a trust region step*, SIAM J. Sci. Stat. Comput. 4 (1983)
+    553–572. [doi](https://doi.org/10.1137/0904038)
+13. J. E. Dennis and R. B. Schnabel, *Numerical Methods for Unconstrained Optimization and Nonlinear
+    Equations*, SIAM (1996). [doi](https://doi.org/10.1137/1.9781611971200)
+14. A. R. Conn, N. I. M. Gould and P. L. Toint, *Trust Region Methods*, SIAM (2000).
+    [doi](https://doi.org/10.1137/1.9780898719857)
+15. J. Nocedal and S. J. Wright, *Numerical Optimization*, 2nd edition, Springer (2006).
+    [doi](https://doi.org/10.1007/978-0-387-40065-5)
+16. D. Viswanath, *Recurrent motions within plane Couette turbulence*, J. Fluid Mech. 580 (2007)
+    339–358. [doi](https://doi.org/10.1017/S0022112007005459),
+    [arXiv](https://arxiv.org/abs/physics/0604062)
+17. D. Viswanath, *The critical layer in pipe flow at high Reynolds number*, Phil. Trans. R. Soc. A 367
+    (2009) 561–576. [doi](https://doi.org/10.1098/rsta.2008.0225),
+    [arXiv](https://arxiv.org/abs/0809.1498)
+18. Y. Saad, *A flexible inner-outer preconditioned GMRES algorithm*, SIAM J. Sci. Comput. 14 (1993)
+    461–469. [doi](https://doi.org/10.1137/0914028)
+19. L. Giraud, J. Langou, M. Rozložník and J. van den Eshof, *Rounding error analysis of the classical
+    Gram–Schmidt orthogonalization process*, Numer. Math. 101 (2005) 87–100.
+    [doi](https://doi.org/10.1007/s00211-005-0615-4)
+20. M. Pernice and H. F. Walker, *NITSOL: a Newton iterative solver for nonlinear systems*, SIAM J. Sci.
+    Comput. 19 (1998) 302–318. [doi](https://doi.org/10.1137/S1064827596303843)
+21. A. Griewank and A. Walther, *Evaluating Derivatives*, SIAM (2008).
+    [doi](https://doi.org/10.1137/1.9780898717761)
+22. U. M. Ascher, R. M. M. Mattheij and R. D. Russell, *Numerical Solution of Boundary Value Problems
+    for Ordinary Differential Equations*, SIAM (1995). [doi](https://doi.org/10.1137/1.9781611971231)
+23. J. P. Boyd, *An analytical and numerical study of the two-dimensional Bratu equation*, J. Sci.
+    Comput. 1 (1986) 183–206. [doi](https://doi.org/10.1007/BF01061392)
+24. P. R. Spalart and S. R. Allmaras, *A one-equation turbulence model for aerodynamic flows*, La
+    Recherche Aérospatiale 1 (1994) 5–21.

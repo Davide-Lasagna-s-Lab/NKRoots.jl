@@ -13,7 +13,7 @@
 #     S̃ = |dU/dy| + ν̃ f_v2/(κ y)²,   f_v2 = 1 - χ/(1 + χ f_v1),
 #     f_w = g ((1 + c_w3⁶)/(g⁶ + c_w3⁶))^(1/6),   g = r + c_w2 (r⁶ - r),   r = min(ν̃/(S̃ κ² y²), 10),
 #
-# with S̃ kept above 0.3 |dU/dy|, the usual limiter, and no trip terms.
+# with S̃ kept above 0.3 |dU/dy|, and no trip terms.
 #
 # The derivatives are the fourth-order finite differences of FDGrids.jl, five-point stencils on a
 # grid stretched towards the wall, with the even symmetry of both fields at the centre.

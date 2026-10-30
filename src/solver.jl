@@ -1,4 +1,4 @@
-# Newton–Krylov hookstep for F(x) = 0 (Viswanath 2007, https://arxiv.org/abs/0809.1498), as the
+# Newton–Krylov hookstep for F(x) = 0 (Viswanath 2009, section 5, https://arxiv.org/abs/0809.1498), as the
 # NewtonHookstep of ReSolver.jl, for any vector type.
 #
 # Newton's method solves F(x) = 0 by repeatedly solving the linear system
