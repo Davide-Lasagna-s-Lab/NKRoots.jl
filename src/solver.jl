@@ -236,7 +236,8 @@ end
 # trust=:ratio: from the ratio of each trial, Δ shrinks by 4 below 1/4 and doubles above 3/4 on the
 # boundary; the first trial with ρ > eta is accepted, the others give a shorter hookstep. A rejected
 # step inside the region is the same for every radius above its length, so Δ falls below that
-# length at once, with no new residual of the same point
+# length at once, with no new residual of the same point. A radius that stays infinite after a
+# rejection has no shorter step to give, and the region has collapsed
 function _ratio(trial!, hook, len, Δ, Δmax, eta, Δmin, xn, rn)
     trials = Tuple{Float64, Float64}[]
     used   = Δ
@@ -257,11 +258,12 @@ function _ratio(trial!, hook, len, Δ, Δmax, eta, Δmin, xn, rn)
         push!(trials, (used, ρ))
         if !at
             ℓ = len(y)
-            while Δ >= ℓ
+            isinf(Δ) && (Δ = ℓ)
+            while Δ >= max(ℓ, Δmin)
                 Δ /= 4
             end
         end
-        Δ < Δmin && return (accepted=false, y=y, at=at, ρ=ρ, used=used, Δ=Δ, x=xn, r=rn, res=res, trials=trials)
+        Δmin <= Δ < Inf || return (accepted=false, y=y, at=at, ρ=ρ, used=used, Δ=Δ, x=xn, r=rn, res=res, trials=trials)
         y, at = hook(Δ)
         used  = Δ
     end
@@ -298,7 +300,7 @@ function _scan(trial!, hook, len, Δ, Δmax, eta, Δmin, xn, rn, xb, rb)
         best > 0 && return (accepted=true, y=yb, at=atb, ρ=tried[best][2], used=tried[best][1],
                             Δ=min(len(yb), Δmax), x=xb, r=rb, res=resb, trials=tried[[1:best - 1; best + 1:end]])
         Δ = minimum(first.(tried)) / 8
-        Δ < Δmin && return (accepted=false, y=yb, at=atb, ρ=NaN, used=Δ, Δ=Δ, x=xb, r=rb, res=resb, trials=tried)
+        Δmin <= Δ < Inf || return (accepted=false, y=yb, at=atb, ρ=NaN, used=Δ, Δ=Δ, x=xb, r=rb, res=resb, trials=tried)
     end
 end
 

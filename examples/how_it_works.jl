@@ -13,7 +13,7 @@ J = Matrix(A) + I
 r = bratu!(zeros(n), zeros(n))
 β = norm(r)
 
-arnoldi = NKRoots.ArnoldiIteration((out, v) -> mul!(out, J, v), -r)
+arnoldi = NKRoots.ArnoldiIteration((out, v) -> mul!(out, J, v), Vector{Float64}[], -r)
 for _ in 1:100
     NKRoots.step!(arnoldi)
 end

@@ -555,8 +555,9 @@ this table after each trial.
 | ρ > 3/4, inside | accepted | unchanged |
 
 A rejected trial needs a new $\mu$ and one residual. It needs no product with $J$, because $H$ and its
-decomposition stay valid. If the radius falls to the rounding of $x$, the search stops as
-`:collapsed`. This happens in a valley with no root. There $J^{\mathsf T} r = 0$, so no step along
+decomposition stay valid. A rejected step inside the region is the same for every radius above its
+length, so the radius falls below that length at once, by factors of four, with no second residual
+of the same point. If the radius falls to the rounding of $x$, the search stops as `:collapsed`. This happens in a valley with no root. There $J^{\mathsf T} r = 0$, so no step along
 the model lowers $\|F\|$.
 
 With `trust=:scan` the same space is used differently. The hooksteps at the radii $\Delta p$, with
@@ -612,7 +613,8 @@ the same hookstep, with $H R^{-1}$ in place of $H$. There are two ways to get $R
 - By default, `gram(M, Q)` returns $G = Z^{\mathsf T} Z = R^{\mathsf T} R$, which a preconditioner can
   often compute cheaply. A Gram matrix squares the spread of the lengths. Directions that depend on
   each other below the square root of the machine precision are lost, and with them part of the
-  step.
+  step. A preconditioner that knows a factor of the $z_j$ can return an `UpperTriangular` $R$ from
+  `gram` in place of $G$, and then loses nothing.
 
 Use `flexible=true` when $M$ solves a few directions exactly, as
 [this example](#preconditioners) shows. Both ways scale the vectors to unit length and drop the
@@ -634,6 +636,11 @@ A finite-difference Jacobian adds one residual per product. A `gram` of your own
 applications it would otherwise need. The singular value decomposition acts on a matrix of size
 $n$ and touches no vector. The inner products grow as $n^2$, so a good preconditioner saves twice,
 in the products and in the orthonormalisation.
+
+A type of vectors can make those inner products cheaper. The basis comes from `_basis(x)`, a vector
+of copies by default. With methods of `_basis`, `_push!`, `_orthogonalise!` and `lincomb!`, and
+`length`, `getindex` and `empty!` on the container, the vectors live together and a vector is
+orthogonalised against many at once. The bases of MultipleShooting do this on the GPU.
 
 ## Keywords
 

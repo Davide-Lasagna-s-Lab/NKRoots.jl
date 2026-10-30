@@ -75,6 +75,49 @@ end
 NKRoots.update!(M::Tangent, x) = (M.F = lu(M.operator(x)); M)
 LinearAlgebra.ldiv!(out, M::Tangent, v) = ldiv!(out, M.F, v)
 
+# ---- a type of vectors with a basis of its own, the vectors as the columns of one matrix ----
+struct Tagged <: AbstractVector{Float64}
+    v::Vector{Float64} # the entries
+end
+Base.size(x::Tagged)                 = size(x.v)
+Base.getindex(x::Tagged, i::Int)     = x.v[i]
+Base.setindex!(x::Tagged, a, i::Int) = (x.v[i] = a; x)
+Base.similar(x::Tagged)              = Tagged(similar(x.v))
+Base.copy(x::Tagged)                 = Tagged(copy(x.v))
+
+mutable struct Columns <: AbstractVector{Tagged}
+    Q::Matrix{Float64} # the vectors
+    n::Int             # how many
+    pushed::Base.RefValue{Int} # vectors stored since the start
+end
+Base.size(B::Columns)            = (B.n,)
+Base.getindex(B::Columns, j::Int) = Tagged(B.Q[:, j])
+Base.empty!(B::Columns)          = (B.n = 0; B)
+
+const PUSHED = Ref(0)
+NKRoots._basis(x::Tagged) = Columns(zeros(length(x), 0), 0, PUSHED)
+
+function NKRoots._push!(B::Columns, v::Tagged)
+    B.n += 1
+    B.n > size(B.Q, 2) && (B.Q = [B.Q zeros(size(B.Q, 1), 8)])
+    B.Q[:, B.n] .= v.v
+    B.pushed[] += 1
+    return B
+end
+
+function NKRoots._orthogonalise!(v::Tagged, B::Columns, h::AbstractVector)
+    Q = view(B.Q, :, 1:length(h))
+    for _ in 1:2
+        c    = Q'*v.v
+        v.v .-= Q*c
+        h  .+= c
+    end
+    return v
+end
+
+NKRoots.lincomb!(out::Tagged, B::Columns, y::AbstractVector) = (mul!(out.v, view(B.Q, :, 1:length(y)), y); out)
+
+
 @testset verbose=true "what the README says" begin
 
 @testset "a first search" begin
@@ -260,6 +303,27 @@ end
         end
     end
 
+    @testset "a rejected step inside the region gives no second residual of the same point" begin
+        s = search(arctan!, fill(10.0, 3); Δ=100.0, tol=1e-10, maxiter=50, krylov_tol=1e-8)
+        @test s.out.status === :converged
+        @test sum(length, s.trace.trials) > 1
+        @test all(k -> allunique(last.(s.trace.trials[k])), 2:length(s.trace.res))
+    end
+
+    @testset "an infinite radius is the Newton step, and a rejected one comes back finite" begin
+        s = search(arctan!, fill(10.0, 3); Δ=Inf, Δmax=Inf, tol=1e-10, maxiter=50, krylov_tol=1e-8)
+        @test s.out.status === :converged
+        @test s.trace.rejected[2] > 0
+        @test all(isfinite, s.trace.radius[3:end])
+    end
+
+    @testset "a Jacobian that vanishes ends the search, at any radius" begin
+        flat!(out, x) = (out[1] = x[1]^2 + 1; out)
+        for Δ in (1.0, Inf), trust in (:ratio, :scan)
+            @test search(flat!, [0.0]; jacobian=:ad, Δ=Δ, Δmax=Δ, trust=trust).out.status === :collapsed
+        end
+    end
+
     @testset "every accepted step has a ratio above eta" begin
         for η in (1e-3, 0.1, 0.5, 0.9)
             t = search(two!, [1.8, 0.7]; jacobian=:ad, Δ=0.9, eta=η, tol=1e-12).trace
@@ -371,15 +435,29 @@ end
         M      = StretchPrecond(Q₀[:, 1], 1e7)
         linear!(out, x) = (mul!(out, B, x); out .-= c; out)
 
-        run(flexible) = (t = Trace();
-                         nkroot!(linear!, B, zeros(m); precond=M, flexible=flexible, Δ=1e8, krylov_dim=40,
-                                 krylov_tol=1e-10, tol=1e-12, maxiter=20, verbose=false, callback=t);
-                         t)
-        gram     = run(false)
-        flexible = run(true)
+        run(P, flexible) = (t = Trace();
+                            nkroot!(linear!, B, zeros(m); precond=P, flexible=flexible, Δ=1e8, krylov_dim=40,
+                                    krylov_tol=1e-10, tol=1e-12, maxiter=20, verbose=false, callback=t);
+                            t)
+        gram     = run(M, false)
+        flexible = run(M, true)
+        root     = run(StretchRoot(M), false)
         @test flexible.res[2] < 1e-7          # one step
+        @test root.res[2] < 1e-7              # gram with a root loses nothing either
         @test minimum(gram.res[1:6]) > 1e-3   # still far after five
         @test minimum(flexible.res) < minimum(gram.res)
+    end
+
+    @testset "a type of vectors can bring its own basis, and the search is the same" begin
+        PUSHED[] = 0
+        q     = bratu(30)
+        plain = search(q.F!, zeros(q.n); Δ=1.0, krylov_tol=1e-6, tol=1e-8)
+        own   = search(q.F!, Tagged(zeros(q.n)); Δ=1.0, krylov_tol=1e-6, tol=1e-8)
+        @test own.out.status === :converged
+        @test PUSHED[] >= own.trace.products[end]
+        @test own.trace.products == plain.trace.products
+        @test abs(own.trace.res[2]/plain.trace.res[2] - 1) < 1e-8
+        @test norm(own.x .- plain.x, Inf) < 1e-12
     end
 end
 
