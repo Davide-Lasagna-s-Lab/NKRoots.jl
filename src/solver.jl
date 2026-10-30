@@ -235,8 +235,9 @@ function _ratio(trial!, hook, Δ, Δmax, eta, Δmin, xn, rn)
     while true
         res, ρ = trial!(xn, rn, y)
 
-        # radius update; a ratio that is not a number counts as a poor step
-        if !(ρ >= 1/4)
+        # radius update; a ratio that is not a number counts as a poor step, and a rejected trial
+        # shrinks the radius whatever eta is, or the same trial would come back
+        if !(ρ >= 1/4) || !(ρ > eta)
             Δ /= 4
         elseif ρ > 3/4 && at
             Δ = min(2Δ, Δmax)
@@ -287,17 +288,19 @@ function _scan(trial!, hook, len, Δ, Δmax, eta, Δmin, xn, rn, xb, rb)
 end
 
 """
-    nkroot!(F!, x; jacobian=:fd, ϵ=1e-6, kwargs...)
+    nkroot!(F!, x; jacobian=:fd, ϵ=nothing, kwargs...)
 
-As `nkroot!(F!, J, x; kwargs...)` with the Jacobian by finite differences of `F!`
-(`jacobian=:fd`, step `ϵ`, see [`jacobianFD`](@ref)) or by dual numbers (`jacobian=:ad`).
+As `nkroot!(F!, J, x; kwargs...)` with the Jacobian by finite differences of `F!` (`jacobian=:fd`)
+or by dual numbers (`jacobian=:ad`). The finite difference takes the step of NITSOL, from the
+machine precision and the norm of `x`, unless `ϵ` sets a relative step (see [`jacobianFD`](@ref)).
 """
-function nkroot!(F!, x; jacobian::Symbol=:fd, ϵ::Real=1e-6, kwargs...)
+function nkroot!(F!, x; jacobian::Symbol=:fd, ϵ::Union{Real, Nothing}=nothing, kwargs...)
     # ---- input checks ----
     jacobian in (:fd, :ad) ||
         throw(ArgumentError("jacobian must be :fd or :ad"))
 
-    J = jacobian === :fd ? jacobianFD(F!, x, ϵ) : jacobianAD(F!, x)
+    J = jacobian === :ad ? jacobianAD(F!, x) :
+        ϵ === nothing    ? jacobianFD(F!, x) : jacobianFD(F!, x, ϵ; step_size=Average())
     return nkroot!(F!, J, x; kwargs...)
 end
 
@@ -363,10 +366,11 @@ _gram_applications(M, m) = which(gram, Tuple{typeof(M), Any}).module === NKRoots
 # relative residual of the GMRES solution of the Newton system; step: newton, the full step inside
 # the trust region, or hook, on its boundary; rejected: trial steps rejected before the accepted one
 _print_header(io::IO) =
-    println(io, "  iter      ‖r‖        radius       ρ      krylov    linear    step   rejected")
+    @printf(io, "%6s  %10s  %9s  %8s  %6s  %8s  %6s  %8s\n",
+            "iter", "‖r‖", "radius", "ρ", "krylov", "linear", "step", "rejected")
 
 function _print_row(io::IO, iter, res, Δ, ρ, k, lin, step, rejected)
-    @printf(io, "%6d  %.4e  %.3e  %8.3f  %6d  %.2e  %6s  %8s\n",
+    @printf(io, "%6d  %10.4e  %9.3e  %8.3f  %6d  %8.2e  %6s  %8s\n",
             iter, res, Δ, ρ, k, lin, step, iter == 0 ? "" : string(rejected))
     flush(io)
 end

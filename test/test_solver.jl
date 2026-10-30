@@ -32,6 +32,17 @@ NKRoots.gram(M::DiagonalPrecond, Q) = [dot(Q[i] ./ M.d, Q[j] ./ M.d) for i in ea
     end
 end
 
+@testset "a ratio between 1/4 and eta               " begin
+    # the valley of two equations with no root: a rejected trial must shrink the radius
+    function valley!(out, x)
+        out[1] = x[1]^2 + x[2]^2 - 2
+        out[2] = exp(x[1] - 1) + x[2]^3 - 2
+        return out
+    end
+    out = nkroot!(valley!, [3.0, -2.0]; jacobian=:ad, Δ=10.0, eta=0.5, maxiter=200, verbose=false)
+    @test out.status in (:collapsed, :maxiter)
+end
+
 @testset "Broyden tridiagonal                      " begin
     for trust in (:ratio, :scan), precond in (nothing, DiagonalPrecond(fill(3.0, 50)))
         x   = fill(-1.0, 50)

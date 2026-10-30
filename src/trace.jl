@@ -98,9 +98,10 @@ Base.length(trace::Trace) = length(trace.res)
 function Base.show(io::IO, ::MIME"text/plain", trace::Trace)
     println(io, "Trace with $(length(trace)) records")
     length(trace) == 0 && return
-    println(io, "  iter      ‖r‖        radius       ρ      krylov   products   rejected     time")
+    @printf(io, "%6s  %10s  %9s  %8s  %6s  %9s  %9s  %7s\n",
+            "iter", "‖r‖", "radius", "ρ", "krylov", "products", "rejected", "time")
     for i in eachindex(trace.res)
-        @printf(io, "%6d  %.4e  %.3e  %8.3f  %6d  %9d  %9d  %7.1f\n",
+        @printf(io, "%6d  %10.4e  %9.3e  %8.3f  %6d  %9d  %9d  %7.1f\n",
                 trace.iter[i], trace.res[i], trace.radius[i], trace.ratio[i], length(trace.krylov[i]),
                 trace.products[i], trace.rejected[i], trace.time[i])
     end
