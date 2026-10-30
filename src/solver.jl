@@ -125,6 +125,9 @@ function nkroot!(F!, J, x; precond=nothing,
     xn = similar(x)        # trial point x + δx
     xb = similar(x)        # best trial point of a scan
     rb = similar(x)        # and its residual
+    zw = similar(x)        # M⁻¹ v of flexible GMRES
+    Q  = _basis(x)         # the Arnoldi vectors, kept from one iteration to the next
+    W  = _basis(x)         # flexible: the vectors zⱼ = M⁻¹ qⱼ orthonormalised, Zₙ = Wₙ R
     ϵ  = 100 * eps(Float64) # relative singular value of R, or eigenvalue of G, set by rounding
 
     res    = norm(r)
@@ -148,12 +151,13 @@ function nkroot!(F!, J, x; precond=nothing,
         β  = norm(b)
 
         # ---- Krylov space of J M⁻¹, one Arnoldi step at a time ----
-        W  = typeof(x)[]          # flexible: the vectors zⱼ = M⁻¹ qⱼ orthonormalised, Zₙ = Wₙ R
+        empty!(Q)
+        empty!(W)
         Rc = Vector{Float64}[]    # flexible: the columns of R, upper triangular
         A! = precond === nothing ? (out, v) -> product!(out, v) :
-             flexible            ? (out, v) -> _flexible!(out, product!, precondition!, v, W, Rc) :
+             flexible            ? (out, v) -> _flexible!(out, product!, precondition!, v, W, Rc, zw) :
                                    (out, v) -> product!(out, precondition!(w, v))
-        arn    = ArnoldiIteration(A!, copy(b))
+        arn    = ArnoldiIteration(A!, Q, copy(b))
         g      = [β]
         H      = arn.H
         krylov = Float64[]                       # relative residual of the GMRES solution
@@ -174,11 +178,10 @@ function nkroot!(F!, J, x; precond=nothing,
 
         # ---- the hookstep (3) in the final space, in the metric of the step ----
         m      = size(H, 2)
-        Q      = view(arn.Q, 1:m)
         R      = precond === nothing || !flexible ? nothing :
                  UpperTriangular([i <= j ? Rc[j][i] : 0.0 for i in 1:m, j in 1:m])
         Rm, Ri = precond === nothing ? (I, I) :
-                 flexible            ? _root(R, ϵ) : _root(_metric(gram(precond, Q)), ϵ)
+                 flexible            ? _root(R, ϵ) : _root(_metric(gram(precond, view(Q, 1:m))), ϵ)
         precond === nothing || flexible || (counts[3] += _gram_applications(precond, m))
         SH     = svd(H * Ri)
         hook(ρ) = (h = _hookstep(SH, g, ρ); (Ri * h[1], h[2]))
@@ -355,10 +358,10 @@ _metric(G::AbstractMatrix)  = Symmetric(G)
 # so that Zₙ = Wₙ R. Gram-Schmidt is applied twice, so that R keeps the precision of the vectors
 # when their lengths spread over orders of magnitude, as they do when M⁻¹ solves a few slow
 # directions exactly: their inner products would square that spread, and the short vectors would
-# fall below rounding. W replaces the vectors zⱼ, with no extra storage
-function _flexible!(out, product!, precondition!, v, W, Rc)
+# fall below rounding. W replaces the vectors zⱼ, with no extra storage, and z is a work vector
+function _flexible!(out, product!, precondition!, v, W, Rc, z=similar(v))
     # ---- z = M⁻¹ v, and J z ----
-    z = precondition!(similar(v), v)
+    precondition!(z, v)
     product!(out, z)
 
     # ---- z orthogonalised against W in place, twice, and normalised ----
@@ -367,7 +370,7 @@ function _flexible!(out, product!, precondition!, v, W, Rc)
     c[end] = norm(z)
     c[end] > 0 && (z ./= c[end])
 
-    push!(W, z)
+    _push!(W, z)
     push!(Rc, c)
 
     return out

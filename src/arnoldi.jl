@@ -5,16 +5,26 @@
 #
 # Interface: the vectors broadcast and support `norm`, `dot` and `similar`; the operator is called
 # in place as `A(out, v)`.
+#
+# The basis is the container of `_basis(x)`, a vector of copies by default. A type of vectors can
+# give its own with methods of `_basis`, `_push!`, `_orthogonalise!` and `lincomb!`, and `length`,
+# `getindex` and `empty!`, to store them together and orthogonalise a vector against many at once.
 
-mutable struct ArnoldiIteration{X, OP}
+_basis(x)            = typeof(x)[]
+_push!(Q::Vector, v) = push!(Q, copy(v))
+
+mutable struct ArnoldiIteration{X, B, OP}
     A::OP              # linear operator, called as A(out, v)
-    Q::Vector{X}       # Arnoldi vectors
+    Q::B               # Arnoldi vectors, an empty basis at the start
+    q::X               # the last Arnoldi vector
+    v::X               # work vector for the next one
     H::Matrix{Float64} # upper Hessenberg matrix, (n + 1) × n after n steps
 
     # start from b, normalised in place
-    function ArnoldiIteration(A::OP, b::X) where {X, OP}
+    function ArnoldiIteration(A::OP, Q::B, b::X) where {X, B, OP}
         b ./= norm(b)
-        return new{X, OP}(A, X[b], zeros(1, 0))
+        _push!(Q, b)
+        return new{X, B, OP}(A, Q, b, similar(b), zeros(1, 0))
     end
 end
 
@@ -29,15 +39,19 @@ function step!(arn::ArnoldiIteration)
     arn.H            = H
 
     # ---- new direction, orthogonal to the basis ----
-    v = similar(Q[n])
-    arn.A(v, Q[n])
+    v = arn.v
+    arn.A(v, arn.q)
 
     _orthogonalise!(v, Q, view(H, 1:n, n))
 
     # ---- normalisation; a zero vector means breakdown: the Krylov space is invariant ----
     H[n + 1, n] = norm(v)
     H[n + 1, n] > 0 && (v ./= H[n + 1, n])
-    push!(Q, v)
+    _push!(Q, v)
+
+    # ---- the new vector is the next to apply A to, the old one the next work vector ----
+    arn.v = arn.q
+    arn.q = v
 
     return Q, H
 end
