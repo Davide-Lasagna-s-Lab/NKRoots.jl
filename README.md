@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="NKRoots.jl" width="720">
+</p>
+
 # NKRoots.jl
 
 A Newton–Krylov hookstep solver for `F(x) = 0` in Julia. It needs only the product of the Jacobian
@@ -18,10 +22,9 @@ radius follows the classical rule or a scan. `Trace` records everything a search
 [The Krylov space](#the-krylov-space) ·
 [Preconditioners](#preconditioners) ·
 [Tracing](#tracing) ·
-[A turbulent channel](#a-turbulent-channel) ·
-[Spalart–Allmaras](#spalartallmaras)
+[A turbulent channel](#a-turbulent-channel)
 
-**Reference.** [How it works](#how-it-works) · [Keywords](#keywords) · [References](#references)
+**Reference.** [How it works](#how-it-works) · [Keywords](#keywords) · [Tests](#tests) · [References](#references)
 
 ## Installation
 
@@ -56,32 +59,46 @@ x   = [1.8, 0.7]
 out = nkroot!(two!, x; Δ=0.1, tol=1e-12)
 ```
 
-Each row of the output is one Newton step.
+Each row of the output is one Newton step, and the last line says how the search ended.
 
 ```
-  iter         ‖r‖     radius         ρ  krylov    linear    step  rejected
-     0  1.8210e+00  1.000e-01       NaN       0       NaN
-     1  1.3909e+00  2.000e-01     0.976       2  6.59e-34    hook         0
-     2  6.7069e-01  4.000e-01     0.973       2  5.32e-33    hook         0
-     3  3.3101e-01  8.000e-01     0.967       2  7.72e-32    hook         0
-     4  1.1106e-01  8.000e-01     0.887       2  2.62e-32  newton         0
-     5  1.7982e-03  8.000e-01     1.000       2  0.00e+00  newton         0
-     6  1.4706e-06  8.000e-01     1.000       2  0.00e+00  newton         0
-     7  9.9742e-13  8.000e-01     1.000       2  0.00e+00  newton         0
+╭──────┬────────────┬──────────┬─────────┬───────┬────────────┬──────────┬──────╮
+│ iter │        ‖F‖ │        Δ │       ρ │ dim K │ ‖Jδ+F‖/‖F‖ │     step │ rej. │
+├──────┼────────────┼──────────┼─────────┼───────┼────────────┼──────────┼──────┤
+│    0 │ 1.8210e+00 │ 1.00e-01 │         │       │            │          │      │
+│    1 │ 1.3909e+00 │ 2.00e-01 │   0.976 │     2 │   6.59e-34 │   ↪ hook │    0 │
+│    2 │ 6.7069e-01 │ 4.00e-01 │   0.973 │     2 │   5.32e-33 │   ↪ hook │    0 │
+│    3 │ 3.3101e-01 │ 8.00e-01 │   0.967 │     2 │   7.72e-32 │   ↪ hook │    0 │
+│    4 │ 1.1106e-01 │ 8.00e-01 │   0.887 │     2 │   2.62e-32 │ → newton │    0 │
+│    5 │ 1.7982e-03 │ 8.00e-01 │   1.000 │     2 │   0.00e+00 │ → newton │    0 │
+│    6 │ 1.4706e-06 │ 8.00e-01 │   1.000 │     2 │   0.00e+00 │ → newton │    0 │
+│    7 │ 9.9742e-13 │ 8.00e-01 │   1.000 │     2 │   0.00e+00 │ → newton │    0 │
+╰──────┴────────────┴──────────┴─────────┴───────┴────────────┴──────────┴──────╯
+  ✓ converged: 7 steps, ‖F‖ = 9.974e-13, 8 residuals, 14 Jacobian products
 ```
+
+| column | meaning |
+|---|---|
+| `iter` | the Newton step |
+| `‖F‖` | the norm of the residual |
+| `Δ` | the radius of the trust region for the next step |
+| `ρ` | the actual reduction of $\|F\|^2$ over the one the linear model predicted |
+| `dim K` | the dimension of the Krylov space |
+| `‖Jδ+F‖/‖F‖` | how well GMRES solved the Newton system $J\delta = -F$ |
+| `step` | `↪ hook` on the boundary of the trust region, `→ newton` the full step inside it |
+| `rej.` | the trial steps rejected before the accepted one |
 
 The radius starts small and doubles while the linear model is good. The first three steps sit on
-the boundary of the trust region, `hook`. The last four are full Newton steps, `newton`, and the
-residual falls quadratically. The columns are the residual norm, the radius, the ratio of the actual
-to the predicted reduction, the size of the Krylov space, the relative residual of the GMRES
-solution, the kind of step and the rejected trials.
+the boundary of the trust region. The last four are full Newton steps, and the residual falls
+quadratically.
 
 The function returns `(status = :converged, iter = 7, res = 9.97e-13)`, and `x` is the root `(1, 1)`.
 
 The figure at the top shows four searches on the landscape of $\tfrac12\|F\|^2$. The blue and orange
 curves are the two equations, and they cross at the two roots, the stars. Three searches reach a
-root. The fourth, from `(1.6, -1.2)`, ends in a valley with no root and stops with the status
-`:collapsed`. A hookstep lowers $\|F\|$, so it finds a local minimum of $\|F\|$ if the guess leads there.
+root. The fourth, from `(1.6, -1.2)`, ends in a valley with no root and stops with
+`✗ trust region collapsed`. A hookstep lowers $\|F\|$, so it finds a local minimum of $\|F\|$ if the
+guess leads there.
 
 Script: [`examples/route.jl`](examples/route.jl).
 
@@ -240,7 +257,7 @@ out = nkroot!(linear!, B, x; precond=M, flexible=true, Δ=1e8, krylov_dim=40, kr
 ![A preconditioner on the Bratu problem, and flexible GMRES](examples/figures/preconditioner.png)
 
 A preconditioner that depends on the point defines `update!(M, x)`, which the search calls at every
-Newton step. The two channels below use one.
+Newton step. The channel below uses one.
 
 Script: [`examples/preconditioner.jl`](examples/preconditioner.jl).
 
@@ -253,39 +270,58 @@ trace = Trace(keep=true)
 u     = [20*sin(π*i*h) for i in 1:n]
 nkroot!(bratu!, u; precond=lu(A), Δ=20.0, krylov_tol=1e-6, tol=1e-9, maxiter=60, verbose=false, callback=trace)
 
-trace              # prints one row per step
-trace.res          # residual norms
-trace.iter         # Newton steps
-trace.time         # seconds since the start
-trace.products     # Jacobian products, cumulative
-trace.residuals    # residuals, cumulative
+trace                # prints one row per step
+trace.res            # residual norms
+trace.iter           # Newton steps
+trace.time           # seconds since the start
+trace.products       # Jacobian products, cumulative
+trace.residuals      # residuals, cumulative
 trace.preconditioner # applications of M⁻¹, cumulative
-trace.krylov       # the GMRES residual after each Arnoldi step, for each Newton step
-trace.step         # "newton" or "hook"
-trace.radius       # the radius of each accepted step
-trace.steplength   # its length
-trace.ratio        # its ratio
-trace.rejected     # the rejected trials of each step
-trace.trials       # the radius and the ratio of each of them
-trace.x            # the iterates, with keep=true
+trace.krylov         # the GMRES residual after each Arnoldi step, for each Newton step
+trace.step           # "newton" or "hook"
+trace.radius         # the radius of each accepted step
+trace.steplength     # its length
+trace.ratio          # its ratio
+trace.rejected       # the rejected trials of each step
+trace.trials         # the radius and the ratio of each of them
+trace.x              # the iterates, with keep=true
 ```
 
 Printed, it gives
 
 ```
 Trace with 27 records
-  iter         ‖r‖     radius         ρ  krylov   products   rejected     time
-     0  2.4470e+09  2.000e+01       NaN       0          0          0      0.0
-     1  9.0019e+08  2.000e+01     0.865      50         50          0      0.0
-     2  3.3116e+08  2.000e+01     0.865      50        100          0      0.0
-     ⋮
-    10  1.6183e+05  2.000e+01     0.712      43        493          0      0.1
-    11  1.1560e+05  2.000e+01     0.490      29        522          0      0.1
-    12  5.1087e+04  5.000e+00     0.930      26        548          1      0.1
-     ⋮
-    24  4.3301e-03  2.000e+01     1.000       6        692          0      0.1
-    25  6.9034e-07  2.000e+01     1.000       6        698          0      0.1
-    26  1.8961e-10  2.000e+01     1.000       6        704          0      0.1
+╭──────┬────────────┬──────────┬─────────┬───────┬──────────┬──────┬─────────╮
+│ iter │        ‖F‖ │        Δ │       ρ │ dim K │ products │ rej. │    time │
+├──────┼────────────┼──────────┼─────────┼───────┼──────────┼──────┼─────────┤
+│    0 │ 2.4470e+09 │ 2.00e+01 │         │       │        0 │      │     0.0 │
+│    1 │ 9.0019e+08 │ 2.00e+01 │   0.865 │    50 │       50 │    0 │     0.3 │
+│    2 │ 3.3116e+08 │ 2.00e+01 │   0.865 │    50 │      100 │    0 │     0.3 │
+│    3 │ 1.2183e+08 │ 2.00e+01 │   0.865 │    50 │      150 │    0 │     0.3 │
+│    4 │ 4.4817e+07 │ 2.00e+01 │   0.865 │    50 │      200 │    0 │     0.3 │
+│    5 │ 1.6487e+07 │ 2.00e+01 │   0.865 │    50 │      250 │    0 │     0.3 │
+│    6 │ 6.0649e+06 │ 2.00e+01 │   0.865 │    50 │      300 │    0 │     0.3 │
+│    7 │ 2.2308e+06 │ 2.00e+01 │   0.865 │    50 │      350 │    0 │     0.3 │
+│    8 │ 8.2030e+05 │ 2.00e+01 │   0.865 │    50 │      400 │    0 │     0.3 │
+│    9 │ 3.0144e+05 │ 2.00e+01 │   0.865 │    50 │      450 │    0 │     0.3 │
+│   10 │ 1.6183e+05 │ 2.00e+01 │   0.712 │    43 │      493 │    0 │     0.3 │
+│   11 │ 1.1560e+05 │ 2.00e+01 │   0.490 │    29 │      522 │    0 │     0.3 │
+│   12 │ 5.1087e+04 │ 5.00e+00 │   0.930 │    26 │      548 │    1 │     0.3 │
+│   13 │ 3.4508e+04 │ 1.00e+01 │   0.548 │    23 │      571 │    0 │     0.3 │
+│   14 │ 2.1010e+04 │ 1.00e+01 │   0.632 │    20 │      591 │    0 │     0.3 │
+│   15 │ 1.3403e+04 │ 1.00e+01 │   0.631 │    17 │      608 │    0 │     0.3 │
+│   16 │ 5.9771e+03 │ 1.00e+01 │   0.821 │    16 │      624 │    0 │     0.3 │
+│   17 │ 5.4071e+03 │ 2.00e+01 │   0.186 │    12 │      636 │    0 │     0.3 │
+│   18 │ 2.8238e+03 │ 5.00e+00 │   0.948 │    11 │      647 │    0 │     0.3 │
+│   19 │ 1.0732e+03 │ 1.00e+01 │   0.857 │    10 │      657 │    0 │     0.3 │
+│   20 │ 4.1956e+02 │ 2.00e+01 │   0.847 │     9 │      666 │    0 │     0.3 │
+│   21 │ 1.6917e+02 │ 2.00e+01 │   0.837 │     7 │      673 │    0 │     0.3 │
+│   22 │ 2.3304e+01 │ 2.00e+01 │   0.981 │     7 │      680 │    0 │     0.3 │
+│   23 │ 1.3397e+00 │ 2.00e+01 │   0.997 │     6 │      686 │    0 │     0.3 │
+│   24 │ 4.3301e-03 │ 2.00e+01 │   1.000 │     6 │      692 │    0 │     0.3 │
+│   25 │ 6.9034e-07 │ 2.00e+01 │   1.000 │     6 │      698 │    0 │     0.3 │
+│   26 │ 1.8961e-10 │ 2.00e+01 │   1.000 │     6 │      704 │    0 │     0.3 │
+╰──────┴────────────┴──────────┴─────────┴───────┴──────────┴──────┴─────────╯
 ```
 
 and every field can be plotted. Here the search starts far above the solution with a preconditioner
@@ -311,76 +347,109 @@ Script: [`examples/tracing.jl`](examples/tracing.jl).
 
 ## A turbulent channel
 
-The mean velocity of a turbulent channel from Prandtl's mixing length. In units of the half height
-and of the friction velocity, on $0 \le y \le 1$,
+The mean flow of a turbulent channel with the Spalart–Allmaras model. Two coupled fields, a strong
+nonlinearity and a stiff operator make this a real test for a Krylov solver.
 
-$$\frac{d}{dy}\Big[\Big(\frac{1}{Re_\tau} + \ell^2\Big|\frac{dU}{dy}\Big|\Big)\frac{dU}{dy}\Big] = -1,
-\qquad U(0) = 0, \qquad \frac{dU}{dy}(1) = 0,$$
-
-with the mixing length of Nikuradse damped at the wall by van Driest,
-
-$$\ell(y) = \big(0.14 - 0.08(1 - y)^2 - 0.06(1 - y)^4\big)\big(1 - e^{-y\,Re_\tau/26}\big).$$
-
-The eddy viscosity depends on the solution, so the problem is nonlinear. Finite volumes on a grid of
-400 points stretched towards the wall give a tridiagonal Jacobian. Its LU factorisation, updated at
-each step through `update!(M, x)`, is the preconditioner. The search needs about ten Newton steps.
-Integrating the equation gives the total stress $1 - y$, a quadratic equation for $dU/dy$ at each
-face. The discrete solution is therefore known exactly, and the search reaches it to $10^{-11}$.
-
-![Mean velocity of a channel](examples/figures/channel.png)
-
-Script: [`examples/channel.jl`](examples/channel.jl).
-
-## Spalart–Allmaras
-
-The same channel with a transport model. The streamwise momentum equation and the Spalart–Allmaras
-equation for the working variable $\tilde\nu$ are solved together, with $\nu = 1/Re_\tau$,
+**The equations.** In units of the half height and of the friction velocity, with $\nu = 1/Re_\tau$, on
+$0 \le y \le 1$, the streamwise momentum balance and the transport of the working variable
+$\tilde\nu$ are
 
 $$\frac{d}{dy}\Big[(\nu + \nu_t)\frac{dU}{dy}\Big] + 1 = 0,$$
 
-$$c_{b1}\tilde S\tilde\nu - c_{w1}f_w\Big(\frac{\tilde\nu}{y}\Big)^2
-+ \frac{1}{\sigma}\Big\{\frac{d}{dy}\Big[(\nu + \tilde\nu)\frac{d\tilde\nu}{dy}\Big]
-+ c_{b2}\Big(\frac{d\tilde\nu}{dy}\Big)^2\Big\} = 0,$$
+$$\underbrace{c_{b1}\tilde S\tilde\nu}_{\text{production}}
+- \underbrace{c_{w1}f_w\Big(\frac{\tilde\nu}{y}\Big)^2}_{\text{destruction}}
++ \underbrace{\frac{1}{\sigma}\frac{d}{dy}\Big[(\nu + \tilde\nu)\frac{d\tilde\nu}{dy}\Big]
++ \frac{c_{b2}}{\sigma}\Big(\frac{d\tilde\nu}{dy}\Big)^2}_{\text{diffusion}} = 0,$$
 
-with $\nu_t = \tilde\nu f_{v1}$ and the closures of the model, written out in the script. The unknown
-`x` holds both fields.
+with $U = \tilde\nu = 0$ at the wall and zero gradients at the centre. The closures are
 
-The stiff term is the diffusion. It is a Laplacian with a variable coefficient, and it is tridiagonal
-in each field, so it makes a cheap preconditioner. It depends on the point, so it is factorised again
-at every step by `update!`.
+$$\nu_t = \tilde\nu f_{v1}, \qquad f_{v1} = \frac{\chi^3}{\chi^3 + c_{v1}^3}, \qquad \chi = \frac{\tilde\nu}{\nu},$$
+
+$$\tilde S = \Big|\frac{dU}{dy}\Big| + \frac{\tilde\nu}{\kappa^2y^2}f_{v2}, \qquad f_{v2} = 1 - \frac{\chi}{1 + \chi f_{v1}},$$
+
+$$f_w = g\Big(\frac{1 + c_{w3}^6}{g^6 + c_{w3}^6}\Big)^{1/6}, \qquad g = r + c_{w2}(r^6 - r), \qquad r = \min\Big(\frac{\tilde\nu}{\tilde S\kappa^2y^2}, 10\Big),$$
+
+with $\tilde S$ kept above $0.3\,|dU/dy|$, the usual limiter, and no trip terms. The constants are
+$c_{b1} = 0.1355$, $c_{b2} = 0.622$, $\sigma = 2/3$, $\kappa = 0.41$, $c_{w1} = c_{b1}/\kappa^2 + (1 + c_{b2})/\sigma$,
+$c_{w2} = 0.3$, $c_{w3} = 2$ and $c_{v1} = 7.1$.
+
+**The discretisation.** The derivatives are the fourth-order finite differences of
+[FDGrids.jl](https://github.com/Davide-Lasagna-s-Lab/FDGrids.jl), with five-point stencils on 300
+points stretched towards the wall. They are plain matrices, with the even symmetry of both fields at
+the centre. The unknown `x` holds the two fields, `[U; ν̃]`.
 
 ```julia
-mutable struct Diffusion
-    c::Channel # the grid and the viscosity
-    A::Any     # LU factorisation of d/dy (ν + νₜ) d/dy
-    B::Any     # and of (1/σ) d/dy (ν + ν̃) d/dy
-end
+ξ    = range(0, 1; length=N + 1)
+y    = collect(@. 1 - tanh(3(1 - ξ))/tanh(3))
+ends = (NoSymmetry(), EvenSymmetry(1.0))
+D₁   = full(DiffMatrix(y, 5, 1; symmetry=ends))[2:end, 2:end]
+D₂   = full(DiffMatrix(y, 5, 2; symmetry=ends))[2:end, 2:end]
+```
 
+**The diffusion.** Both equations hold the same operator,
+
+$$\mathcal D_a = \frac{d}{dy}\,a\,\frac{d}{dy} = a\frac{d^2}{dy^2} + \frac{da}{dy}\frac{d}{dy},$$
+
+a Laplacian with a variable coefficient, $a = \nu + \nu_t$ for the velocity and
+$a = (\nu + \tilde\nu)/\sigma$ for $\tilde\nu$. As a matrix it is one line.
+
+```julia
+diffusion(a) = Diagonal(a)*D₂ + Diagonal(D₁*a)*D₁
+```
+
+It is the stiff term, for two reasons. The first is its size. The wall needs a fine grid, with a first
+spacing $h$ of $10^{-4}$, so the second derivative has entries of order $a/h^2$, about $10^5$ at
+$Re_\tau = 1000$. Production and destruction hold no second derivative and stay far smaller. The
+second is its reach. A row of the matrix couples a point to its two neighbours on each side, so one
+product with the Jacobian moves information by two points. The wall must reach the centre across 300
+points, and GMRES needs a Krylov space nearly as large as the system.
+
+A direct solve of the diffusion removes both problems, so it is the right preconditioner,
+
+$$M = \begin{pmatrix} \mathcal D_{\nu + \nu_t} & 0 \\ 0 & \mathcal D_{(\nu + \tilde\nu)/\sigma} \end{pmatrix}.$$
+
+The Jacobian times $M^{-1}$ is then the identity plus production, destruction and the coupling of the
+two fields, all divided by the diffusion. These are mild, and GMRES needs about 14 products per
+Newton step. The coefficients depend on the point, so `update!` factorises $M$ again at each step.
+
+```julia
 function NKRoots.update!(M::Diffusion, x)
-    # the two tridiagonal matrices at x, factorised
-end
-
-function LinearAlgebra.ldiv!(out, M::Diffusion, v)
-    # one solve for each field
+    c   = M.c
+    p   = max.(x[c.N + 1:2c.N], 0.0)
+    νt  = p .* fv1.(p ./ c.ν)
+    M.A = lu(diffusion(c, c.ν .+ νt))
+    M.B = lu(diffusion(c, (c.ν .+ p) ./ σ))
+    return M
 end
 ```
 
-The search goes up in the Reynolds number, and each solution is the guess of the next. Six values
-from 180 to 5200 take between 12 and 26 Newton steps each. The solutions satisfy the integrated
-balance of the stress to $10^{-11}$, and in the log layer $\tilde\nu^+ = \kappa y^+$, as the model was
-built to give. Here is one step of the continuation, from the solution at 550 to the one at 1000.
+**The search.** It goes up in the Reynolds number, and each solution is the guess of the next. Six
+values from 180 to 5200 take between 16 and 58 Newton steps each. Here is one step of the
+continuation, from the solution at 550 to the one at 1000.
 
 | preconditioner | Jacobian products | outcome |
 |---|---:|---|
-| none | 12000 | stops at $10^{-4}$ after 40 steps |
-| the Laplacian, $\nu\, d^2/dy^2$, factorised once | 821 | converged |
-| the diffusion, factorised at each step | 237 | converged |
+| none | 12000 | $\|F\| = 1.2$ after 40 steps |
+| the Laplacian `ν D₂` on both fields, factorised once | 1909 | converged in 29 steps |
+| the diffusion, factorised at each step | 385 | converged in 28 steps |
 
-The Laplacian alone sees only the viscosity, a hundred times smaller than the eddy viscosity away
-from the wall, and the diffusion sees both. A guess matters too. From a parabola at $Re_\tau = 1000$
-the search with the diffusion preconditioner stalls, which is why the continuation is there.
+The Laplacian alone has the right form and the wrong size, because the eddy viscosity away from the
+wall is a hundred times the viscosity. The two preconditioners take about the same Newton steps,
+since GMRES solves to the same tolerance, and the diffusion needs five times fewer products. The last
+panel below has logarithmic axes, because both fall almost at once on a linear one.
 
 ![Spalart–Allmaras channel](examples/figures/spalart_allmaras.png)
+
+**The checks.** The momentum equation integrates to $(\nu + \nu_t)\,dU/dy = 1 - y$. The error of this
+balance at $Re_\tau = 1000$ falls with the fourth power of the spacing, as the stencils promise.
+
+| points | error of the total stress | order |
+|---:|---:|---:|
+| 150 | $6.90\times 10^{-5}$ | |
+| 300 | $4.32\times 10^{-6}$ | 4.00 |
+| 600 | $2.70\times 10^{-7}$ | 4.00 |
+
+In the log layer $\tilde\nu^+ = \kappa y^+$, the middle panel, as the model was built to give.
 
 Script: [`examples/spalart_allmaras.jl`](examples/spalart_allmaras.jl).
 
@@ -429,6 +498,15 @@ gives a shorter hookstep in the same Krylov space, with no new products with $J$
 
 A search ends with the status `:converged`, `:maxiter`, `:stopped`, or `:collapsed` when no step in the
 Krylov space reduces the residual.
+
+## Tests
+
+```
+julia --project -e 'using Pkg; Pkg.test()'
+```
+
+Every statement on this page is a test, in [`test/test_claims.jl`](test/test_claims.jl), with one
+group per section. The summary lists each claim by name.
 
 ## References
 

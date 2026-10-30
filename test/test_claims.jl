@@ -1,0 +1,491 @@
+# Everything the README says, as a test, section by section. Each testset names what it establishes.
+
+# ---- two equations in two unknowns, with their Jacobian ----
+function two!(out, x)
+    out[1] = x[1]^2 + x[2]^2 - 2
+    out[2] = exp(x[1] - 1) + x[2]^3 - 2
+    return out
+end
+
+jacobian_two(x) = [2x[1] 2x[2]; exp(x[1] - 1) 3x[2]^2]
+
+struct TwoJacobian
+    A::Matrix{Float64} # the matrix at the last point
+end
+
+function NKRoots.update!(J::TwoJacobian, x, r)
+    J.A .= jacobian_two(x)
+    return J
+end
+
+LinearAlgebra.mul!(out, J::TwoJacobian, v) = mul!(out, J.A, v)
+
+
+# ---- the Bratu problem, by second differences on n points ----
+function bratu(n)
+    h = 1/(n + 1)
+    F! = function (out, u)
+        for i in 1:n
+            left   = i == 1 ? zero(u[i]) : u[i - 1]
+            right  = i == n ? zero(u[i]) : u[i + 1]
+            out[i] = (left - 2u[i] + right)/h^2 + exp(u[i])
+        end
+        return out
+    end
+    A = Tridiagonal(fill(1/h^2, n - 1), fill(-2/h^2, n), fill(1/h^2, n - 1))
+    return (; n, h, F!, A)
+end
+
+function search(F!, x₀; kwargs...)
+    trace = Trace(keep=true)
+    x     = copy(x₀)
+    out   = nkroot!(F!, x; verbose=false, callback=trace, kwargs...)
+    return (; x, out, trace)
+end
+
+
+# ---- a preconditioner that counts its updates, and remembers where it was ----
+mutable struct Followed{P}
+    M::P                     # the preconditioner
+    points::Vector{Vector{Float64}} # the points of its updates
+end
+Followed(M) = Followed(M, Vector{Float64}[])
+NKRoots.update!(F::Followed, x) = (push!(F.points, copy(x)); F)
+LinearAlgebra.ldiv!(out, F::Followed, v) = ldiv!(out, F.M, v)
+
+# ---- nonlinear diffusion, (a(u) u')' + 1 = 0 with a = ν + u², and a preconditioner on it ----
+function diffusion(n, ν)
+    h  = 1/(n + 1)
+    a  = (u, i) -> ν + ((i == 0 ? zero(u[1]) : u[i]) + (i == n ? zero(u[1]) : u[i + 1]))^2/4
+    F! = function (out, u)
+        flux(i) = a(u, i)*((i == n ? zero(u[1]) : u[i + 1]) - (i == 0 ? zero(u[1]) : u[i]))/h
+        for i in 1:n
+            out[i] = (flux(i) - flux(i - 1))/h + 1
+        end
+        return out
+    end
+    operator(u) = (f = [a(u, i)/h^2 for i in 0:n]; Tridiagonal(f[2:n], -(f[1:n] .+ f[2:n + 1]), f[2:n]))
+    return (; n, F!, operator)
+end
+
+mutable struct Tangent
+    operator::Any # the matrix at a point
+    F::Any        # its LU factorisation
+end
+NKRoots.update!(M::Tangent, x) = (M.F = lu(M.operator(x)); M)
+LinearAlgebra.ldiv!(out, M::Tangent, v) = ldiv!(out, M.F, v)
+
+@testset verbose=true "what the README says" begin
+
+@testset "a first search" begin
+    @testset "it finds both roots, from different guesses" begin
+        a = search(two!, [1.8, 0.7]; Δ=0.1, tol=1e-12)
+        b = search(two!, [-1.5, 0.3]; Δ=0.1, tol=1e-12)
+        @test a.out.status === :converged
+        @test norm(a.x - [1, 1]) < 1e-10
+        @test b.out.status === :converged
+        @test norm(two!(zeros(2), b.x)) < 1e-11
+        @test norm(b.x - [-0.7137, 1.2209]) < 1e-3
+    end
+
+    @testset "a small radius doubles while the model is good" begin
+        s = search(two!, [1.8, 0.7]; Δ=0.1, tol=1e-12)
+        @test s.trace.radius[2:4] ≈ [0.1, 0.2, 0.4]
+        @test s.trace.step[2:4] == ["hook", "hook", "hook"]
+        @test s.trace.step[end] == "newton"
+    end
+
+    @testset "the last steps are quadratic" begin
+        s = search(two!, [1.8, 0.7]; jacobian=:ad, Δ=0.1, tol=1e-12)
+        r = s.trace.res
+        @test r[end - 1] <= 2r[end - 2]^2
+        @test r[end] <= 2r[end - 1]^2
+    end
+
+    @testset "a guess can end in a valley with no root" begin
+        s = search(two!, [1.6, -1.2]; jacobian=:ad, Δ=0.1, maxiter=100)
+        J = jacobian_two(s.x)
+        r = two!(zeros(2), s.x)
+        @test s.out.status === :collapsed
+        @test norm(r) > 0.4                # not a root
+        @test norm(J'*r) < 1e-5            # but a stationary point of ‖F‖²
+    end
+end
+
+
+@testset "the Jacobian" begin
+    @testset "finite difference, dual numbers and your own object agree" begin
+        ad   = search(two!, [1.8, 0.7]; jacobian=:ad, Δ=0.1, tol=1e-12)
+        fd   = search(two!, [1.8, 0.7]; jacobian=:fd, Δ=0.1, tol=1e-12)
+        mine = Trace()
+        nkroot!(two!, TwoJacobian(zeros(2, 2)), [1.8, 0.7]; Δ=0.1, tol=1e-12, verbose=false, callback=mine)
+
+        # the exact Jacobians agree to rounding, the finite difference until its error shows
+        k = length(ad.trace.res) - 1
+        @test length(mine.res) == length(ad.trace.res)
+        @test maximum(abs, mine.res[1:k] ./ ad.trace.res[1:k] .- 1) < 1e-9
+        @test maximum(abs, fd.trace.res[1:5] ./ ad.trace.res[1:5] .- 1) < 1e-6
+        @test fd.out.status === :converged
+    end
+
+    @testset "ϵ sets the relative step of the finite difference" begin
+        x      = [1.8, 0.7]
+        exact  = jacobian_two(x)*[1.0, 0.0]
+        rough  = jacobianFD(two!, x, 1e-2; step_size=NKRoots.Average())*[1.0, 0.0]
+        smooth = jacobianFD(two!, x)*[1.0, 0.0]
+        @test 1e-4 < norm(rough - exact) < 1e-1
+        @test norm(smooth - exact) < 1e-6
+
+        fine = search(two!, x; Δ=0.1, tol=1e-12)
+        bad  = search(two!, x; Δ=0.1, tol=1e-12, ϵ=1e-2)
+        @test bad.trace.res != fine.trace.res # the keyword reaches the solver
+    end
+
+    @testset "a coarse Jacobian converges, but only linearly" begin
+        fine = search(two!, [1.8, 0.7]; jacobian=:ad, Δ=0.1, tol=1e-12)
+        bad  = search(two!, [1.8, 0.7]; Δ=0.1, tol=1e-12, ϵ=1e-2, maxiter=40)
+        r    = bad.trace.res
+        @test bad.out.status === :converged
+        @test length(r) > length(fine.trace.res)
+        @test r[end]/r[end - 1] > 1e-4 # linear, far from the square of the last residual
+    end
+
+    @testset "moving a finite difference costs no evaluation of F" begin
+        calls = Ref(0)
+        F!    = (o, v) -> (calls[] += 1; two!(o, v))
+        s     = search(F!, [1.8, 0.7]; Δ=0.1, tol=1e-12)
+        @test calls[] == s.trace.residuals[end] + s.trace.products[end] + 1 # the 1 builds the Jacobian
+    end
+end
+
+
+@testset "the Bratu problem" begin
+    # the closed form, u(x) = -2 log(cosh((x - 1/2) θ/2)/cosh(θ/4)) with θ = √2 cosh(θ/4)
+    closed!(out, θ) = (out[1] = θ[1] - √2*cosh(θ[1]/4); out)
+    θ₁ = search(closed!, [1.5]; Δ=0.5, tol=1e-13, maxiter=50).x[1]
+    θ₂ = search(closed!, [10.0]; Δ=0.5, tol=1e-13, maxiter=50).x[1]
+    exact(p, θ) = [-2log(cosh((i*p.h - 1/2)*θ/2)/cosh(θ/4)) for i in 1:p.n]
+
+    settings = (Δ=1.0, krylov_tol=1e-6, tol=1e-8, maxiter=60)
+
+    @testset "the guess decides which of the two solutions it finds" begin
+        p    = bratu(200)
+        low  = search(p.F!, zeros(p.n); precond=lu(p.A), settings...)
+        high = search(p.F!, [6sin(π*i*p.h) for i in 1:p.n]; precond=lu(p.A), settings...)
+        @test low.out.status === :converged
+        @test high.out.status === :converged
+        @test maximum(low.x) ≈ 0.1405 atol=1e-3
+        @test maximum(high.x) ≈ 4.09 atol=0.02
+        @test norm(low.x - exact(p, θ₁), Inf) < 1e-6
+        @test norm(high.x - exact(p, θ₂), Inf) < 1e-3
+    end
+
+    @testset "the error falls as the square of the spacing" begin
+        errors = map((100, 200)) do n
+            p = bratu(n)
+            s = search(p.F!, zeros(n); precond=lu(p.A), settings...)
+            norm(s.x - exact(p, θ₁), Inf)
+        end
+        @test 3.5 < errors[1]/errors[2] < 4.5
+    end
+end
+
+
+@testset "the hookstep" begin
+    x₀ = [1.8, 0.7]
+    r₀ = two!(zeros(2), x₀)
+    J₀ = jacobian_two(x₀)
+
+    # one step on the radius Δ, accepted whatever its ratio
+    function step(Δ)
+        t = Trace(keep=true)
+        nkroot!(two!, copy(x₀); jacobian=:ad, Δ=Δ, Δmax=Δ, eta=-Inf, maxiter=1, verbose=false, callback=t)
+        return t.x[2] - x₀, t.ratio[2]
+    end
+
+    newton = -(J₀ \ r₀)
+    ℓ      = norm(newton)
+
+    @testset "the step has the length of the radius, up to the Newton step" begin
+        for Δ in (0.01, 0.1, 0.5, 0.9ℓ)
+            @test norm(step(Δ)[1]) ≈ Δ rtol=1e-8
+        end
+        @test step(10ℓ)[1] ≈ newton rtol=1e-8
+    end
+
+    @testset "a small radius follows the steepest descent" begin
+        δ       = step(1e-5)[1]
+        descent = -J₀'*r₀
+        @test dot(δ, descent)/(norm(δ)*norm(descent)) > 1 - 1e-6
+    end
+
+    @testset "a larger radius lowers the residual of the linear model" begin
+        model = [norm(r₀ + J₀*step(Δ)[1]) for Δ in (0.05, 0.1, 0.2, 0.4, 0.8)]
+        @test issorted(model; rev=true)
+    end
+
+    @testset "the ratio is one for small steps, and the Newton step raises the residual" begin
+        @test step(1e-3)[2] ≈ 1 atol=1e-2
+        @test step(10ℓ)[2] < 0
+        @test norm(two!(zeros(2), x₀ + newton)) > norm(r₀)
+    end
+end
+
+
+@testset "the radius" begin
+    guesses = ([2.5, 2.0], [1.8, 0.7], [-2.0, 2.0])
+
+    @testset "the rule: by four below 1/4, double above 3/4 on the boundary" begin
+        checked = 0
+        for guess in guesses, Δ in (0.1, 1.0, 10.0)
+            t = search(two!, guess; jacobian=:ad, Δ=Δ, tol=1e-12, maxiter=100).trace
+            for k in 2:length(t.res) - 1
+                t.rejected[k + 1] == 0 || continue
+                expected = t.ratio[k] < 1/4                           ? t.radius[k]/4 :
+                           t.ratio[k] > 3/4 && t.step[k] == "hook"    ? 2t.radius[k]  : t.radius[k]
+                @test t.radius[k + 1] ≈ expected
+                checked += 1
+            end
+        end
+        @test checked > 30
+    end
+
+    @testset "a rejected trial always shrinks the radius, whatever eta is" begin
+        for η in (0.3, 0.5, 0.9)
+            s = search(two!, [3.0, -2.0]; jacobian=:ad, Δ=10.0, eta=η, maxiter=200)
+            @test s.out.status in (:collapsed, :converged, :maxiter) # it ends
+            for k in 2:length(s.trace.res), (Δ, ρ) in s.trace.trials[k]
+                @test !(ρ > η)
+            end
+        end
+    end
+
+    @testset "every accepted step has a ratio above eta" begin
+        for η in (1e-3, 0.1, 0.5, 0.9)
+            t = search(two!, [1.8, 0.7]; jacobian=:ad, Δ=0.9, eta=η, tol=1e-12).trace
+            @test all(>(η), t.ratio[2:end])
+        end
+    end
+
+    @testset "the step never leaves the trust region, and Δmax caps it" begin
+        t = search(two!, [2.5, 2.0]; jacobian=:ad, Δ=1.0, Δmax=0.2, tol=1e-12, maxiter=50).trace
+        @test all(t.steplength[2:end] .<= t.radius[2:end] .* (1 + 1e-10))
+        @test all(t.radius[2:end] .<= 0.2)
+    end
+
+    @testset "a small first radius, or a small cap, wastes steps" begin
+        steps(; kw...) = search(two!, [2.5, 2.0]; jacobian=:ad, tol=1e-12, maxiter=100, kw...).out.iter
+        @test steps(Δ=1e-3) > steps(Δ=1e-1) >= steps(Δ=1.0)
+        @test steps(Δ=1.0, Δmax=0.05) > steps(Δ=1.0, Δmax=0.2) > steps(Δ=1.0)
+    end
+
+    @testset "trust=:scan finds the same root, keeps the best trial, at no extra product" begin
+        ratio = search(two!, [2.5, 2.0]; jacobian=:ad, Δ=1.0, tol=1e-12)
+        scan  = search(two!, [2.5, 2.0]; jacobian=:ad, Δ=1.0, tol=1e-12, trust=:scan)
+        @test ratio.out.status === :converged
+        @test scan.out.status === :converged
+        @test norm(ratio.x - scan.x) < 1e-10
+        @test scan.trace.res[2] <= ratio.trace.res[2] # the scan holds the trial on Δ itself
+        @test scan.trace.residuals[end] > ratio.trace.residuals[end]
+        @test diff(scan.trace.products)[1] == diff(ratio.trace.products)[1]
+    end
+end
+
+
+@testset "the Krylov space" begin
+    p = bratu(200)
+    M = lu(p.A)
+    settings = (precond=M, Δ=1.0, tol=1e-10, maxiter=40)
+
+    @testset "krylov_dim caps the space, krylov_tol stops it" begin
+        for d in (1, 2, 5)
+            t = search(p.F!, zeros(p.n); krylov_dim=d, krylov_tol=1e-12, settings...).trace
+            @test maximum(length, t.krylov) == d
+        end
+        t = search(p.F!, zeros(p.n); krylov_dim=100, krylov_tol=1e-4, settings...).trace
+        @test all(k -> k[end] < 1e-4, t.krylov[2:end])
+    end
+
+    @testset "a space of one vector still converges, linearly" begin
+        one = search(p.F!, zeros(p.n); krylov_dim=1, settings...)
+        all = search(p.F!, zeros(p.n); krylov_tol=1e-8, settings...)
+        @test one.out.status === :converged
+        @test one.out.iter > 2all.out.iter
+    end
+
+    @testset "a tight tolerance gives fewer Newton steps, a loose one fewer products" begin
+        loose = search(p.F!, zeros(p.n); krylov_tol=1e-1, settings...).trace
+        tight = search(p.F!, zeros(p.n); krylov_tol=1e-8, settings...).trace
+        @test length(tight) < length(loose)
+        @test tight.products[end] > loose.products[end]
+    end
+
+    @testset "the residual of GMRES is the residual of the Newton system" begin
+        # with an exact Jacobian: on this stiff operator a finite difference has its own rounding
+        s = search(p.F!, zeros(p.n); jacobian=:ad, krylov_tol=1e-6, settings...)
+        t = s.trace
+        k = findfirst(==("newton"), t.step)  # a full step, that of GMRES
+        r = p.F!(zeros(p.n), t.x[k - 1])
+        J = Matrix(p.A) + Diagonal(exp.(t.x[k - 1]))
+        δ = t.x[k] - t.x[k - 1]
+        @test norm(r + J*δ)/norm(r) ≈ t.krylov[k][end] rtol=1e-3
+    end
+end
+
+
+@testset "preconditioners" begin
+    p = bratu(200)
+    settings = (Δ=1.0, krylov_tol=1e-6, tol=1e-8)
+
+    @testset "they change the cost, not the root" begin
+        plain = search(p.F!, zeros(p.n); krylov_dim=250, settings...)
+        fast  = search(p.F!, zeros(p.n); precond=lu(p.A), settings...)
+        @test norm(plain.x - fast.x, Inf) < 1e-10
+        @test plain.trace.products[end] > 400
+        @test fast.trace.products[end] < 20
+    end
+
+    @testset "update!(M, x) follows the search, once per Newton step" begin
+        F = Followed(lu(p.A))
+        s = search(p.F!, zeros(p.n); precond=F, settings...)
+        @test length(F.points) == s.out.iter
+        @test F.points == s.trace.x[1:end - 1]
+    end
+
+    @testset "the diffusion that follows the point beats the frozen one, and that beats none" begin
+        q     = diffusion(60, 1e-2)
+        x₀    = fill(1.0, q.n)
+        opts  = (Δ=1.0, krylov_tol=1e-6, tol=1e-8, maxiter=100, krylov_dim=120)
+        none  = search(q.F!, x₀; opts...).trace.products[end]
+        froz  = search(q.F!, x₀; precond=lu(q.operator(x₀)), opts...).trace.products[end]
+        moved = search(q.F!, x₀; precond=Tangent(q.operator, nothing), opts...).trace.products[end]
+        @test moved < froz < none
+    end
+
+    @testset "flexible=true survives a preconditioner that stretches" begin
+        Random.seed!(1)
+        m      = 60
+        Q₀     = Matrix(qr(randn(m, m)).Q)
+        B      = Q₀*Diagonal([1e-7; range(1, 3; length=m - 1)])*Q₀'
+        c      = randn(m)
+        M      = StretchPrecond(Q₀[:, 1], 1e7)
+        linear!(out, x) = (mul!(out, B, x); out .-= c; out)
+
+        run(flexible) = (t = Trace();
+                         nkroot!(linear!, B, zeros(m); precond=M, flexible=flexible, Δ=1e8, krylov_dim=40,
+                                 krylov_tol=1e-10, tol=1e-12, maxiter=20, verbose=false, callback=t);
+                         t)
+        gram     = run(false)
+        flexible = run(true)
+        @test flexible.res[2] < 1e-7          # one step
+        @test minimum(gram.res[1:6]) > 1e-3   # still far after five
+        @test minimum(flexible.res) < minimum(gram.res)
+    end
+end
+
+
+@testset "tracing and the output" begin
+    p = bratu(100)
+
+    @testset "the trace holds the whole history" begin
+        u = [20sin(π*i*p.h) for i in 1:p.n]
+        s = search(p.F!, u; precond=lu(p.A), Δ=20.0, krylov_tol=1e-6, tol=1e-9, maxiter=60)
+        t = s.trace
+        @test length(t) == s.out.iter + 1
+        @test t.iter == 0:s.out.iter
+        @test t.res[end] == s.out.res
+        @test t.x[end] == s.x
+        @test length(t.x) == length(t)
+        @test all(issorted, (t.products, t.residuals, t.preconditioner, t.time))
+        @test t.products[end] == sum(length, t.krylov)
+        @test all(==(1), diff(t.iter))
+        @test all(in(("hook", "newton")), t.step[2:end])
+        @test t.rejected[2:end] == [count(q -> !(q[2] > 1e-3), trials) for trials in t.trials[2:end]]
+        @test all(k -> issorted(k; rev=true), t.krylov[2:end])
+    end
+
+    @testset "a callback stops the search" begin
+        t    = Trace()
+        stop = info -> (t(info); info.iter >= 3)
+        out  = nkroot!(p.F!, zeros(p.n); precond=lu(p.A), Δ=1.0, maxiter=20, verbose=false, callback=stop)
+        @test out.status === :stopped
+        @test out.iter == 3
+        @test length(t) == 4
+    end
+
+    @testset "the four ends of a search" begin
+        ok   = nkroot!(two!, [1.8, 0.7]; Δ=0.1, verbose=false)
+        many = nkroot!(two!, [1.8, 0.7]; Δ=0.1, maxiter=2, verbose=false)
+        val  = nkroot!(two!, [1.6, -1.2]; jacobian=:ad, Δ=0.1, maxiter=100, verbose=false)
+        stop = nkroot!(two!, [1.8, 0.7]; Δ=0.1, verbose=false, callback=info -> true)
+        @test (ok.status, many.status, val.status, stop.status) == (:converged, :maxiter, :collapsed, :stopped)
+    end
+
+    # the lines of a box have one width: the columns are aligned
+    aligned(lines) = length(unique(textwidth.(lines))) == 1
+
+    @testset "the printed table is aligned, in every state of the search" begin
+        for (guess, kw, mark) in (([1.8, 0.7], (; tol=1e-12), "✓ converged"),
+                                  ([1.8, 0.7], (; maxiter=2), "✗ maxiter"),
+                                  ([1.6, -1.2], (; jacobian=:ad, maxiter=100), "✗ trust region collapsed"))
+            io = IOBuffer()
+            nkroot!(two!, guess; Δ=0.1, io=io, kw...)
+            text  = String(take!(io))
+            lines = split(chomp(text), "\n")
+            box   = lines[1:end - 1]
+            @test startswith(box[1], "╭") && startswith(box[3], "├") && startswith(box[end], "╰")
+            @test aligned(box)
+            @test occursin(mark, lines[end])
+            @test occursin("‖F‖", box[2]) && occursin("Δ", box[2]) && occursin("ρ", box[2])
+            @test occursin("‖Jδ+F‖/‖F‖", box[2])
+            @test !occursin("NaN", text)
+        end
+
+        io = IOBuffer()
+        nkroot!(two!, [1.8, 0.7]; Δ=0.1, io=io, callback=info -> info.iter >= 2)
+        @test occursin("■ stopped", String(take!(io)))
+    end
+
+    @testset "the kinds of step are named" begin
+        io = IOBuffer()
+        nkroot!(two!, [1.8, 0.7]; Δ=0.1, tol=1e-12, io=io)
+        text = String(take!(io))
+        @test occursin("↪ hook", text)
+        @test occursin("→ newton", text)
+    end
+
+    @testset "the printed trace is aligned" begin
+        t = search(two!, [1.8, 0.7]; Δ=0.1, tol=1e-12).trace
+        lines = split(sprint(show, MIME("text/plain"), t), "\n")
+        @test startswith(lines[1], "Trace with $(length(t)) records")
+        @test aligned(lines[2:end])
+        @test length(lines) == length(t) + 5
+    end
+
+    @testset "verbose=false prints nothing" begin
+        io = IOBuffer()
+        nkroot!(two!, [1.8, 0.7]; Δ=0.1, verbose=false, io=io)
+        @test isempty(take!(io))
+    end
+end
+
+
+@testset "any type that broadcasts" begin
+    # the Bratu problem on a square, with a matrix for the unknown
+    n = 20
+    h = 1/(n + 1)
+    function square!(out, u)
+        at(i, j) = (1 <= i <= n && 1 <= j <= n) ? u[i, j] : zero(u[1, 1])
+        for j in 1:n, i in 1:n
+            out[i, j] = (at(i - 1, j) + at(i + 1, j) + at(i, j - 1) + at(i, j + 1) - 4u[i, j])/h^2 + exp(u[i, j])
+        end
+        return out
+    end
+    u   = zeros(n, n)
+    out = nkroot!(square!, u; Δ=1.0, krylov_dim=120, krylov_tol=1e-6, tol=1e-6, verbose=false)
+    @test out.status === :converged
+    @test norm(square!(similar(u), u)) < 1e-6
+    @test u ≈ reverse(u; dims=1) rtol=1e-5 # the symmetry of the square
+end
+
+end

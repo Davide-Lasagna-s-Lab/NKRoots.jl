@@ -104,6 +104,9 @@ function nkroot!(F!, J, x; precond=nothing,
     trust in (:ratio, :scan) ||
         throw(ArgumentError("trust must be :ratio or :scan"))
 
+    # ---- the first radius obeys the largest one, as all the others do ----
+    Δ = min(Δ, Δmax)
+
     # ---- evaluations, counted ----
     counts         = [0, 0, 0] # residuals, Jacobian products, preconditioner applications
     residual!(o, v)     = (counts[1] += 1; F!(o, v))
@@ -210,7 +213,7 @@ function nkroot!(F!, J, x; precond=nothing,
     end
 
     res < tol && (status = :converged)
-    verbose && status === :collapsed && println(io, "  trust region collapsed: no step in the Krylov space reduces ‖r‖")
+    verbose && _print_footer(io, status, iter, res, evaluations())
 
     return (; status, iter, res)
 end
@@ -362,15 +365,48 @@ _gram_applications(M, m) = which(gram, Tuple{typeof(M), Any}).module === NKRoots
 # ---------------------------------------------------------------------------- #
 # output                                                                       #
 # ---------------------------------------------------------------------------- #
-# radius: trust-region radius after the update; krylov: dimension of the Krylov space; linear:
-# relative residual of the GMRES solution of the Newton system; step: newton, the full step inside
-# the trust region, or hook, on its boundary; rejected: trial steps rejected before the accepted one
-_print_header(io::IO) =
-    @printf(io, "%6s  %10s  %9s  %8s  %6s  %8s  %6s  %8s\n",
-            "iter", "‖r‖", "radius", "ρ", "krylov", "linear", "step", "rejected")
+# One row per Newton step. ‖F‖: residual norm. Δ: trust-region radius after the update. ρ: ratio of
+# the actual to the predicted reduction. dim K: dimension of the Krylov space. ‖Jδ+F‖/‖F‖: relative
+# residual of the GMRES solution of the Newton system. step: ↪ hook on the boundary of the trust
+# region, → newton the full step inside it. rej.: trial steps rejected before the accepted one. The
+# last line says how the search ended, ✗ trust region collapsed when no step reduces ‖F‖.
+const _ROWS  = ("iter", "‖F‖", "Δ", "ρ", "dim K", "‖Jδ+F‖/‖F‖", "step", "rej.")
+const _WIDTH = (4, 10, 8, 7, 5, 10, 8, 4)
+
+# a rule of the table, from its left, middle and right corners
+_rule(l, m, r, widths) = l * join(("─"^(w + 2) for w in widths), m) * r
+
+# a row of the table, each cell right-aligned
+_cells(cells, widths) = "│ " * join((lpad(c, w) for (c, w) in zip(cells, widths)), " │ ") * " │"
+
+function _print_header(io::IO)
+    println(io, _rule("╭", "┬", "╮", _WIDTH))
+    println(io, _cells(_ROWS, _WIDTH))
+    println(io, _rule("├", "┼", "┤", _WIDTH))
+end
 
 function _print_row(io::IO, iter, res, Δ, ρ, k, lin, step, rejected)
-    @printf(io, "%6d  %10.4e  %9.3e  %8.3f  %6d  %8.2e  %6s  %8s\n",
-            iter, res, Δ, ρ, k, lin, step, iter == 0 ? "" : string(rejected))
+    kind  = step == "hook" ? "↪ hook" : step == "newton" ? "→ newton" : ""
+    first = iter == 0
+    cells = (string(iter),
+             @sprintf("%.4e", res),
+             @sprintf("%.2e", Δ),
+             first ? "" : @sprintf("%.3f", ρ),
+             first ? "" : string(k),
+             first ? "" : @sprintf("%.2e", lin),
+             kind,
+             first ? "" : string(rejected))
+    println(io, _cells(cells, _WIDTH))
+    flush(io)
+end
+
+# the bottom of the table, and how the search ended
+function _print_footer(io::IO, status, iter, res, counts)
+    mark = status === :converged ? "✓ converged" :
+           status === :collapsed ? "✗ trust region collapsed" :
+           status === :maxiter   ? "✗ maxiter reached" : "■ stopped by the callback"
+    println(io, _rule("╰", "┴", "╯", _WIDTH))
+    @printf(io, "  %s: %d steps, ‖F‖ = %.3e, %d residuals, %d Jacobian products\n",
+            mark, iter, res, counts.residuals, counts.products)
     flush(io)
 end

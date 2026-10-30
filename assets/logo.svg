@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" role="img" aria-labelledby="title desc">
+  <title id="title">NKRoots.jl logo</title>
+  <desc id="desc">A search walks down the contours of a residual to a root, a star, each step a hookstep inside a dashed trust region in Julia colors, beside the NKRoots.jl wordmark.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f2f5f8"/>
+    </linearGradient>
+    <filter id="panel-shadow" x="-12%" y="-25%" width="124%" height="150%">
+      <feDropShadow dx="0" dy="9" stdDeviation="11" flood-color="#172033" flood-opacity="0.14"/>
+    </filter>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#172033" flood-opacity="0.10"/>
+    </filter>
+    <marker id="flow-arrow" viewBox="0 0 12 10" refX="9" refY="5" markerWidth="4.0" markerHeight="3.4" orient="auto">
+      <path d="M0 0 L12 5 L0 10 Z" fill="#242936"/>
+    </marker>
+  </defs>
+
+  <!-- Main panel -->
+  <rect x="24" y="24" width="912" height="252" rx="24" fill="url(#bg)" filter="url(#panel-shadow)"/>
+
+  <!-- Left illustration: a search inside its trust regions, on the landscape of the residual -->
+  <g transform="translate(232 150)">
+    <g transform="translate(74.0 20.0) rotate(-24.0)">
+      <ellipse cx="0" cy="0" rx="22.0" ry="11.0" fill="none" stroke="#c6ccd6" stroke-width="2.4"/>
+      <ellipse cx="0" cy="0" rx="48.0" ry="25.0" fill="none" stroke="#c6ccd6" stroke-width="2.1"/>
+      <ellipse cx="0" cy="0" rx="78.0" ry="42.0" fill="none" stroke="#c6ccd6" stroke-width="1.9"/>
+      <ellipse cx="0" cy="0" rx="110.0" ry="60.0" fill="none" stroke="#c6ccd6" stroke-width="1.6"/>
+      <ellipse cx="0" cy="0" rx="144.0" ry="80.0" fill="none" stroke="#c6ccd6" stroke-width="1.4"/>
+    </g>
+    <g filter="url(#soft)">
+      <circle cx="-128.0" cy="-52.0" r="50.0" fill="#389826" fill-opacity="0.14" stroke="#389826" stroke-width="4" stroke-dasharray="9 7"/>
+      <circle cx="-66.0" cy="40.0" r="37.0" fill="#4063d8" fill-opacity="0.14" stroke="#4063d8" stroke-width="4" stroke-dasharray="9 7"/>
+      <circle cx="-6.0" cy="58.0" r="27.0" fill="#9558b2" fill-opacity="0.14" stroke="#9558b2" stroke-width="4" stroke-dasharray="9 7"/>
+      <circle cx="44.0" cy="40.0" r="19.0" fill="#cb3c33" fill-opacity="0.14" stroke="#cb3c33" stroke-width="4" stroke-dasharray="9 7"/>
+      <path d="M-128.0 -52.0 Q-117.2 7.6 -66.0 40.0" fill="none" stroke="#242936" stroke-width="5" stroke-linecap="round" marker-end="url(#flow-arrow)"/>
+      <path d="M-66.0 40.0 Q-40.0 62.2 -6.0 58.0" fill="none" stroke="#242936" stroke-width="5" stroke-linecap="round" marker-end="url(#flow-arrow)"/>
+      <path d="M-6.0 58.0 Q23.0 60.0 44.0 40.0" fill="none" stroke="#242936" stroke-width="5" stroke-linecap="round" marker-end="url(#flow-arrow)"/>
+      <path d="M44.0 40.0 Q63.4 36.6 74.0 20.0" fill="none" stroke="#242936" stroke-width="5" stroke-linecap="round" marker-end="url(#flow-arrow)"/>
+      <circle cx="-128.0" cy="-52.0" r="6" fill="#242936"/>
+      <circle cx="-66.0" cy="40.0" r="6" fill="#242936"/>
+      <circle cx="-6.0" cy="58.0" r="6" fill="#242936"/>
+      <circle cx="44.0" cy="40.0" r="6" fill="#242936"/>
+      <path d="M74.0 1.0 L78.7 13.5 L92.1 14.1 L81.6 22.5 L85.2 35.4 L74.0 28.0 L62.8 35.4 L66.4 22.5 L55.9 14.1 L69.3 13.5 Z" fill="#242936"/>
+    </g>
+  </g>
+
+  <!-- Wordmark and subtitle -->
+  <g transform="translate(476 96)">
+    <text x="0" y="48" font-family="Inter, Avenir, Helvetica, Arial, sans-serif"
+          font-size="58" font-weight="820" fill="#222734" letter-spacing="0">NKRoots.jl</text>
+    <text x="2" y="90" font-family="Inter, Avenir, Helvetica, Arial, sans-serif"
+          font-size="21" font-weight="700" fill="#4f596b" letter-spacing="0">Newton–Krylov hookstep for F(x) = 0,</text>
+    <text x="2" y="118" font-family="Inter, Avenir, Helvetica, Arial, sans-serif"
+          font-size="21" font-weight="700" fill="#4f596b" letter-spacing="0">preconditioned, and traced step by step.</text>
+  </g>
+</svg>

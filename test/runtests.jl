@@ -5,3 +5,4 @@ using Test
 
 include("test_jacobian.jl")
 include("test_solver.jl")
+include("test_claims.jl")
