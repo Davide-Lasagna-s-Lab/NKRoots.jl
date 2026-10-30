@@ -157,6 +157,16 @@ arctan!(out, x) = (out .= atan.(x); out)
     @test out.status == :converged
     @test sum(rej) > 0
     @test C.products[] == sum(dims)
+
+    # a radius far above the length of a rejected Newton step: the radius falls below that length
+    # at once, with no second residual of the same point
+    x     = [10.0]
+    trace = Trace()
+    nkroot!(arctan!, jacobianFD(arctan!, x), x; Δ=1e6, maxiter=1, verbose=false, callback=trace)
+    @test trace.rejected[2] > 0
+    @test all(diff(first.(trace.trials[2])) .< 0)
+    @test trace.residuals[2] - trace.residuals[1] == trace.rejected[2] + 1
+    @test trace.rejected[2] <= 3
 end
 
 @testset "trace                                    " begin

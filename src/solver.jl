@@ -196,7 +196,7 @@ function nkroot!(F!, J, x; precond=nothing,
 
         # ---- trust region: the accepted trial, by the update rule of `trust` ----
         Δmin = eps() * (1 + norm(x))
-        t    = trust === :ratio ? _ratio(trial!, hook, Δ, Δmax, eta, Δmin, xn, rn) :
+        t    = trust === :ratio ? _ratio(trial!, hook, len, Δ, Δmax, eta, Δmin, xn, rn) :
                                   _scan(trial!, hook, len, Δ, Δmax, eta, Δmin, xn, rn, xb, rb)
         Δ    = t.Δ
         t.accepted || (status = :collapsed; break)
@@ -230,8 +230,10 @@ end
 # every other trial; or `accepted = false` when the radius falls below `Δmin`.
 
 # trust=:ratio: from the ratio of each trial, Δ shrinks by 4 below 1/4 and doubles above 3/4 on the
-# boundary; the first trial with ρ > eta is accepted, the others give a shorter hookstep
-function _ratio(trial!, hook, Δ, Δmax, eta, Δmin, xn, rn)
+# boundary; the first trial with ρ > eta is accepted, the others give a shorter hookstep. A rejected
+# step inside the region is the same for every radius above its length, so Δ falls below that
+# length at once, with no new residual of the same point
+function _ratio(trial!, hook, len, Δ, Δmax, eta, Δmin, xn, rn)
     trials = Tuple{Float64, Float64}[]
     used   = Δ
     y, at  = hook(Δ)
@@ -249,6 +251,12 @@ function _ratio(trial!, hook, Δ, Δmax, eta, Δmin, xn, rn)
         # accepted, or a shorter hookstep in the same space unless the region has collapsed
         ρ > eta && return (accepted=true, y=y, at=at, ρ=ρ, used=used, Δ=Δ, x=xn, r=rn, res=res, trials=trials)
         push!(trials, (used, ρ))
+        if !at
+            ℓ = len(y)
+            while Δ >= ℓ
+                Δ /= 4
+            end
+        end
         Δ < Δmin && return (accepted=false, y=y, at=at, ρ=ρ, used=used, Δ=Δ, x=xn, r=rn, res=res, trials=trials)
         y, at = hook(Δ)
         used  = Δ
