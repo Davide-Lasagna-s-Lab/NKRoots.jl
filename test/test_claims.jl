@@ -515,7 +515,7 @@ end
             @test aligned(box)
             @test occursin(mark, lines[end])
             @test occursin("‖F‖", box[2]) && occursin("Δ", box[2]) && occursin("ρ", box[2])
-            @test occursin("‖Jδ+F‖/‖F‖", box[2])
+            @test occursin("GMRES res.", box[2])
             @test !occursin("NaN", text)
         end
 

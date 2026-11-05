@@ -63,7 +63,7 @@ Each row of the output is one Newton step, and the last line says how the search
 
 ```
 ╭──────┬────────────┬──────────┬─────────┬───────┬────────────┬──────────┬──────╮
-│ iter │        ‖F‖ │        Δ │       ρ │ dim K │ ‖Jδ+F‖/‖F‖ │     step │ rej. │
+│ iter │        ‖F‖ │        Δ │       ρ │ dim K │ GMRES res. │     step │ rej. │
 ├──────┼────────────┼──────────┼─────────┼───────┼────────────┼──────────┼──────┤
 │    0 │ 1.8210e+00 │ 1.00e-01 │         │       │            │          │      │
 │    1 │ 1.3909e+00 │ 2.00e-01 │   0.976 │     2 │   6.59e-34 │   ↪ hook │    0 │
@@ -84,7 +84,7 @@ Each row of the output is one Newton step, and the last line says how the search
 | `Δ` | the radius of the trust region for the next step |
 | `ρ` | the actual reduction of ‖F‖² over the one the linear model predicted |
 | `dim K` | the dimension of the Krylov space |
-| `‖Jδ+F‖/‖F‖` | how well GMRES solved the Newton system $J\delta = -F$ |
+| `GMRES res.` | how well GMRES solved the Newton system $J\delta = -F$, for the full step before the trust region |
 | `step` | `↪ hook` on the boundary of the trust region, `→ newton` the full step inside it |
 | `rej.` | the trial steps rejected before the accepted one |
 
@@ -492,7 +492,7 @@ $$\|r + J\delta\| = \|\beta e_1 - Hy\|, \qquad \|\delta\| = \|y\|.$$
 
 A problem of size $N$ has become a problem of size $n$. GMRES is its minimum with no constraint on
 $y$. A Givens rotation of the new column of $H$ updates the residual of GMRES at every Arnoldi step,
-with no operation on vectors. That residual is the column `‖Jδ+F‖/‖F‖` of the output. The space stops
+with no operation on vectors. That residual is the column `GMRES res.` of the output. The space stops
 growing when it falls below `krylov_tol`, at `krylov_dim`, or at a breakdown, when the new vector
 vanishes because the space is invariant. Two passes of modified Gram–Schmidt keep $Q_n$ orthonormal
 to rounding.

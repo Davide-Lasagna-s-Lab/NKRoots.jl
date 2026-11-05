@@ -386,11 +386,11 @@ _gram_applications(M, m) = which(gram, Tuple{typeof(M), Any}).module === NKRoots
 # output                                                                       #
 # ---------------------------------------------------------------------------- #
 # One row per Newton step. ‖F‖: residual norm. Δ: trust-region radius after the update. ρ: ratio of
-# the actual to the predicted reduction. dim K: dimension of the Krylov space. ‖Jδ+F‖/‖F‖: relative
-# residual of the GMRES solution of the Newton system. step: ↪ hook on the boundary of the trust
+# the actual to the predicted reduction. dim K: dimension of the Krylov space. GMRES res.: relative
+# residual of the GMRES solution of the Newton system, the full step before the trust region. step: ↪ hook on the boundary of the trust
 # region, → newton the full step inside it. rej.: trial steps rejected before the accepted one. The
 # last line says how the search ended, ✗ trust region collapsed when no step reduces ‖F‖.
-const _ROWS  = ("iter", "‖F‖", "Δ", "ρ", "dim K", "‖Jδ+F‖/‖F‖", "step", "rej.")
+const _ROWS  = ("iter", "‖F‖", "Δ", "ρ", "dim K", "GMRES res.", "step", "rej.")
 const _WIDTH = (4, 10, 8, 7, 5, 10, 8, 4)
 
 # a rule of the table, from its left, middle and right corners
