@@ -20,6 +20,15 @@ end
 
 LinearAlgebra.mul!(out, J::TwoJacobian, v) = mul!(out, J.A, v)
 
+# a Jacobian that counts its products and its moves, around another
+struct CountingJacobian{T}
+           J::T                         # the Jacobian
+    products::Base.RefValue{Int}        # its products
+     updates::Base.RefValue{Int}        # its moves
+end
+LinearAlgebra.mul!(out, C::CountingJacobian, v) = (C.products[] += 1; mul!(out, C.J, v))
+NKRoots.update!(C::CountingJacobian, x, r) = (C.updates[] += 1; NKRoots.update!(C.J, x, r); C)
+
 
 # ---- the Bratu problem, by second differences on n points ----
 function bratu(n)
@@ -659,6 +668,40 @@ end
         @test all(in(("hook", "newton")), t.step[2:end])
         @test t.rejected[2:end] == [count(q -> !(q[2] > 1e-3), trials) for trials in t.trials[2:end]]
         @test all(k -> issorted(k; rev=true), t.krylov[2:end])
+    end
+
+    @testset "the trace counts every call of F, of the Jacobian and of the preconditioner" begin
+        # finite differences, forward and central: one or two calls of F per product, besides the residuals
+        for (difference, per) in ((:forward, 1), (:central, 2))
+            t = search(two!, [2.5, 2.0]; difference=difference, Δ=1.0, tol=1e-10).trace
+            @test t.function_calls == t.residuals .+ per .* t.products
+            @test t.jacobian_updates == t.iter
+            @test all(==(0), t.preconditioner_updates) && all(==(0), t.grams)
+        end
+
+        # dual numbers: one call of F per product
+        t = search(two!, [2.5, 2.0]; jacobian=:ad, Δ=1.0, tol=1e-10).trace
+        @test t.function_calls == t.residuals .+ t.products
+
+        # a Jacobian of your own: every product and every move is counted, and the calls of F are those of
+        # the search
+        products = Ref(0)
+        updates  = Ref(0)
+        J        = TwoJacobian(zeros(2, 2))
+        struct_J = CountingJacobian(J, products, updates)
+        t        = Trace()
+        nkroot!(two!, struct_J, [2.5, 2.0]; Δ=1.0, tol=1e-10, verbose=false, callback=t)
+        @test t.products[end] == products[]
+        @test t.jacobian_updates[end] == updates[] == t.iter[end]
+        @test t.function_calls == t.residuals
+
+        # a preconditioner: moved once per step, with gram once per step unless flexible
+        p = bratu(50)
+        for flexible in (false, true)
+            t = search(p.F!, fill(1.0, p.n); precond=lu(p.A), flexible=flexible, Δ=10.0, tol=1e-8).trace
+            @test t.preconditioner_updates == t.iter
+            @test t.grams == (flexible ? zero(t.iter) : t.iter)
+        end
     end
 
     @testset "a callback stops the search" begin

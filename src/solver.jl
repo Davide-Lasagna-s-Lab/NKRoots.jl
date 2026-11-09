@@ -72,7 +72,9 @@ Solve `F(x) = 0` by Newton–Krylov from the guess `x`, overwritten with the roo
 - The search stops when `‖r‖ < tol`, after `maxiter` iterations, when no step is accepted, or when
   `callback(info)` returns `true`, called at the start and after every iteration with
   `info = (; iter, x, res, evaluations, krylov, step, radius, steplength, ratio, rejected, trials)`:
-  the cumulative counts of residuals, Jacobian products and preconditioner applications, the
+  the cumulative counts of the calls of the arguments (residuals, Jacobian products, preconditioner
+  applications, moves of `J` and of `M`, calls of `gram`, and every call of `F`, those of a Jacobian
+  built by NKRoots.jl included), the
   relative residual of the GMRES solution after each Arnoldi step, `"newton"` for the GMRES step,
   `"hook"` for a hookstep on the boundary of the trust region or `"line"` for a GMRES step
   shortened by backtracking, the radius of the accepted step (its length without a trust region),
@@ -114,12 +116,20 @@ function nkroot!(F!, J, x; precond=nothing,
     # ---- the first radius obeys the largest one, as all the others do ----
     Δ = min(Δ, Δmax)
 
-    # ---- evaluations, counted ----
-    counts              = [0, 0, 0] # residuals, Jacobian products, preconditioner applications
+    # ---- the calls of the arguments, counted: residuals, products with J, applications of M⁻¹, moves of J,
+    #      moves of M, calls of gram, and the calls of F made by J since the start ----
+    counts              = zeros(Int, 6)
+    start               = _calls(J)
     residual!(o, v)     = (counts[1] += 1; F!(o, v))
     product!(o, v)      = (counts[2] += 1; mul!(o, J, v))
     precondition!(o, v) = (counts[3] += 1; ldiv!(o, precond, v))
-    evaluations()       = (residuals=counts[1], products=counts[2], preconditioner=counts[3])
+    evaluations()       = (residuals              = counts[1],
+                           products               = counts[2],
+                           preconditioner         = counts[3],
+                           jacobian_updates       = counts[4],
+                           preconditioner_updates = counts[5],
+                           grams                  = counts[6],
+                           function_calls         = counts[1] + _calls(J) - start)
 
     # ---- the residual at x, in the workspace of the search ----
     ws     = _workspace(x)
@@ -141,12 +151,13 @@ function nkroot!(F!, J, x; precond=nothing,
 
         # ---- the linear model of the Newton system (1) at x, in a Krylov space ----
         update!(J, x, r)
-        precond === nothing || update!(precond, x)
+        counts[4] += 1
+        precond === nothing || (update!(precond, x); counts[5] += 1)
         model = _model(r, ws, product!, precondition!; precond=precond,
                                                         flexible=flexible,
                                                         krylov_dim=krylov_dim,
                                                         krylov_tol=krylov_tol)
-        precond === nothing || flexible || (counts[3] += _gram_applications(precond, model.dim))
+        precond === nothing || flexible || (counts[3] += _gram_applications(precond, model.dim); counts[6] += 1)
 
         # ---- the step, by the rule of the globalisation ----
         trial! = (y, μ) -> _trial!(residual!, model, ws, x, r, res, y, μ; accelerate=acceleration === :geodesic,

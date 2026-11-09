@@ -11,7 +11,12 @@ after every iteration it records
 - `iter`, the iteration number, and `time`, the seconds elapsed since the first record;
 - `res`, the residual norm `‖r‖`;
 - `residuals`, `products` and `preconditioner`, the cumulative numbers of evaluations of the
-  residual, of products with the Jacobian and of applications of the preconditioner;
+  residual by the search, of products with the Jacobian and of applications of the preconditioner;
+- `jacobian_updates`, `preconditioner_updates` and `grams`, the cumulative numbers of moves of the
+  Jacobian, `update!(J, x, r)`, and of the preconditioner, `update!(M, x)`, and of calls of `gram`;
+- `function_calls`, the cumulative number of calls of `F`, those of the search and those that a
+  Jacobian built by NKRoots.jl makes, by finite differences or dual numbers; the calls inside a
+  Jacobian of your own are not seen;
 - `krylov`, the relative residual of the GMRES solution of the Newton system after each Arnoldi
   step of the iteration (empty at the start);
 - `step`, `"newton"` if the accepted step is the GMRES step, `"hook"` if it lies on the boundary
@@ -35,26 +40,34 @@ trace.products # Jacobian products, cumulative
 ```
 """
 struct Trace
-              iter::Vector{Int}                            # iteration number
-              time::Vector{Float64}                        # seconds since the first record
-               res::Vector{Float64}                        # residual norm ‖r‖
-         residuals::Vector{Int}                            # residual evaluations, cumulative
-          products::Vector{Int}                            # Jacobian products, cumulative
-    preconditioner::Vector{Int}                            # preconditioner applications, cumulative
-            krylov::Vector{Vector{Float64}}                # relative GMRES residuals of the iteration
-              step::Vector{String}                         # "newton", "hook" or "line"
-            radius::Vector{Float64}                        # radius of the accepted step
-        steplength::Vector{Float64}                        # length of the accepted step
-             ratio::Vector{Float64}                        # actual over predicted reduction of ‖r‖²
-          rejected::Vector{Int}                            # trials with a ratio below eta
-            trials::Vector{Vector{Tuple{Float64, Float64}}} # radius and ratio of the other trials
-                 x::Vector{Any}                            # copies of the iterates, with keep=true
-              keep::Bool                                   # keep the iterates
-                t₀::Base.RefValue{Float64}                 # wall-clock time of the first record
+                      iter::Vector{Int}                             # iteration number
+                      time::Vector{Float64}                         # seconds since the first record
+                       res::Vector{Float64}                         # residual norm ‖r‖
+                 residuals::Vector{Int}                             # residual evaluations, cumulative
+                  products::Vector{Int}                             # Jacobian products, cumulative
+            preconditioner::Vector{Int}                             # preconditioner applications, cumulative
+          jacobian_updates::Vector{Int}                             # moves of J, cumulative
+    preconditioner_updates::Vector{Int}                             # moves of M, cumulative
+                     grams::Vector{Int}                             # calls of gram, cumulative
+            function_calls::Vector{Int}                             # calls of F, cumulative
+                    krylov::Vector{Vector{Float64}}                 # relative GMRES residuals of the iteration
+                      step::Vector{String}                          # "newton", "hook" or "line"
+                    radius::Vector{Float64}                         # radius of the accepted step
+                steplength::Vector{Float64}                         # length of the accepted step
+                     ratio::Vector{Float64}                         # actual over predicted reduction of ‖r‖²
+                  rejected::Vector{Int}                             # trials with a ratio below eta
+                    trials::Vector{Vector{Tuple{Float64, Float64}}} # radius and ratio of the other trials
+                         x::Vector{Any}                             # copies of the iterates, with keep=true
+                      keep::Bool                                    # keep the iterates
+                        t₀::Base.RefValue{Float64}                  # wall-clock time of the first record
 
     Trace(; keep::Bool=false) = new(Int[],
                                     Float64[],
                                     Float64[],
+                                    Int[],
+                                    Int[],
+                                    Int[],
+                                    Int[],
                                     Int[],
                                     Int[],
                                     Int[],
@@ -80,6 +93,10 @@ function (trace::Trace)(info::NamedTuple)
     push!(trace.residuals,      info.evaluations.residuals)
     push!(trace.products,       info.evaluations.products)
     push!(trace.preconditioner, info.evaluations.preconditioner)
+    push!(trace.jacobian_updates,       info.evaluations.jacobian_updates)
+    push!(trace.preconditioner_updates, info.evaluations.preconditioner_updates)
+    push!(trace.grams,                  info.evaluations.grams)
+    push!(trace.function_calls,         info.evaluations.function_calls)
     push!(trace.krylov,         copy(info.krylov))
     push!(trace.step,           info.step)
     push!(trace.radius,         info.radius)

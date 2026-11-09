@@ -6,14 +6,19 @@ using DualNumbers
 # Object to compute the action of the jacobian of a function exactly, by dual numbers.
 # Assumes F obeys F(out, x) and overwrites `out` with F(x), returning out.
 struct JacobianAD{X, FT, TUP}
-      F::FT  # operator
-      x::X   # point at which the derivative is taken
-    tmp::TUP # temporaries with dual
+        F::FT                      # operator
+        x::X                       # point at which the derivative is taken
+      tmp::TUP                     # temporaries with dual
+    calls::Base.RefValue{Int}      # calls of F, cumulative
 end
 
 # outer constructor
 jacobianAD(F, x) =
-    JacobianAD(F, copy(x), (similar(x, Dual{eltype(x)}), similar(x, Dual{eltype(x)})))
+    JacobianAD(F, copy(x), (similar(x, Dual{eltype(x)}), similar(x, Dual{eltype(x)})), Ref(0))
+
+# the calls of F made by a Jacobian: none for one that NKRoots.jl does not build
+_calls(J) = 0
+_calls(J::JacobianAD) = J.calls[]
 
 # linearise at x
 update!(J::JacobianAD, x, r) = (J.x .= x; J)
@@ -29,6 +34,7 @@ function LinearAlgebra.mul!(out, op::JacobianAD, y)
 
     # calculate function with perturbed input
     op.F(Fx_dual, x_dual)
+    op.calls[] += 1
 
     # exact gradient
     out .= dualpart.(Fx_dual)
@@ -54,11 +60,14 @@ struct JacobianFD{FT, X}
              F::FT      # the function, F(out, x) -> out
              x::X       # the point at which the derivative is taken
             Fx::X       # F at x, for forward differences
-           tmp::X       # the perturbed point x ± ε y
-          work::X       # F at x - ε y, for central differences
-    difference::Symbol  # :forward or :central
-             δ::Float64 # the relative step
+           tmp::X                   # the perturbed point x ± ε y
+          work::X                   # F at x - ε y, for central differences
+    difference::Symbol              # :forward or :central
+             δ::Float64             # the relative step
+         calls::Base.RefValue{Int}  # calls of F, cumulative, the one at x included
 end
+
+_calls(J::JacobianFD) = J.calls[]
 
 """
     jacobianFD(F, x; difference=:forward, ϵ=nothing)
@@ -94,7 +103,8 @@ function jacobianFD(F, x; difference::Symbol=:forward, ϵ::Union{Real, Nothing}=
                       similar(x),
                       similar(x),
                       difference,
-                      Float64(δ))
+                      Float64(δ),
+                      Ref(1))
 end
 
 # linearise at x, with r = F(x)
@@ -114,6 +124,7 @@ function LinearAlgebra.mul!(out, J::JacobianFD, y)
     ε      = J.δ*(1 + norm(J.x))/ny
     J.tmp .= J.x .+ ε .* y
     J.F(out, J.tmp)
+    J.calls[] += 1
 
     # ---- the forward difference, with F(x) from the point of J ----
     if J.difference === :forward
@@ -124,6 +135,7 @@ function LinearAlgebra.mul!(out, J::JacobianFD, y)
     # ---- the central difference, with F at x - ε y ----
     J.tmp .= J.x .- ε .* y
     J.F(J.work, J.tmp)
+    J.calls[] += 1
     out .= (out .- J.work) ./ (2ε)
 
     return out

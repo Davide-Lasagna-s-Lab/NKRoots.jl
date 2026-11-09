@@ -366,21 +366,25 @@ trace = Trace(keep=true)
 u     = [20*sin(π*i*h) for i in 1:n]
 nkroot!(bratu!, u; precond=lu(A), Δ=20.0, krylov_tol=1e-6, tol=1e-9, maxiter=60, verbose=false, callback=trace)
 
-trace                # prints one row per step
-trace.res            # residual norms
-trace.iter           # Newton steps
-trace.time           # seconds since the start
-trace.products       # Jacobian products, cumulative
-trace.residuals      # residuals, cumulative
-trace.preconditioner # applications of M⁻¹, cumulative
-trace.krylov         # the GMRES residual after each Arnoldi step, for each Newton step
-trace.step           # "newton", "hook" or "line"
-trace.radius         # the radius of each accepted step
-trace.steplength     # its length
-trace.ratio          # its ratio
-trace.rejected       # the rejected trials of each step
-trace.trials         # the radius and the ratio of each of them
-trace.x              # the iterates, with keep=true
+trace                        # prints one row per step
+trace.res                    # residual norms
+trace.iter                   # Newton steps
+trace.time                   # seconds since the start
+trace.products               # Jacobian products, cumulative
+trace.residuals              # residuals, cumulative
+trace.preconditioner         # applications of M⁻¹, cumulative
+trace.function_calls         # calls of F, by the search and by a Jacobian of NKRoots.jl, cumulative
+trace.jacobian_updates       # moves of J, cumulative
+trace.preconditioner_updates # moves of M, cumulative
+trace.grams                  # calls of gram, cumulative
+trace.krylov                 # the GMRES residual after each Arnoldi step, for each Newton step
+trace.step                   # "newton", "hook" or "line"
+trace.radius                 # the radius of each accepted step
+trace.steplength             # its length
+trace.ratio                  # its ratio
+trace.rejected               # the rejected trials of each step
+trace.trials                 # the radius and the ratio of each of them
+trace.x                      # the iterates, with keep=true
 ```
 
 Printed, it gives
