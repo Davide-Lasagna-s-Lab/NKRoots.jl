@@ -10,7 +10,8 @@ with a vector, so it suits large systems, and `x` can be any type that broadcast
 The step comes from a trust region in a Krylov space, the hookstep of Viswanath. A rejected step costs
 one residual and no new Krylov space. The Jacobian can be a finite difference, dual numbers or your
 own operator. A right preconditioner is optional, and the trust region stays on the step in `x`. The
-radius follows the classical rule or a scan. `Trace` records everything a search does.
+radius follows the classical rule or a scan. Backtracking along the Newton step and classical Newton
+are at hand too. `Trace` records everything a search does.
 
 ![Routes of four searches on two equations](examples/figures/route.png)
 
@@ -19,6 +20,8 @@ radius follows the classical rule or a scan. `Trace` records everything a search
 [The Bratu problem](#the-bratu-problem) ·
 [The hookstep](#the-hookstep) ·
 [The radius](#the-radius) ·
+[The longest step](#the-longest-step) ·
+[Without a trust region](#without-a-trust-region) ·
 [The Krylov space](#the-krylov-space) ·
 [Preconditioners](#preconditioners) ·
 [Tracing](#tracing) ·
@@ -201,14 +204,14 @@ Script: [`examples/hookstep.jl`](examples/hookstep.jl).
 
 ## The radius
 
-With `trust=:ratio`, the default, the radius moves after each trial. It shrinks by four below
+With `trust=:classical`, the default, the radius moves after each trial. It shrinks by four below
 ρ = 1/4 and doubles above ρ = 3/4 on the boundary. With `trust=:scan` the hooksteps at the radii Δ/8
-to 4Δ in steps of √2 are all tried in the same Krylov space, and the best is kept. The next radius is
-the length of that step. The best is the trial of smallest residual with `scan=:residual`, the
-default, or the longest step that lowers the residual with `scan=:longest`. The longest step may
-lower the residual less now and leave room for longer steps after it, in the spirit of the delayed
-gratification of Transtrum, Machta and Sethna [16], who take the smallest damping of
-Levenberg–Marquardt that does not move uphill.
+to 8Δ in steps of √2 are all tried in the same Krylov space, and the best is kept. The next radius
+is the length of that step. The best is the trial of smallest residual with `scan=:greedy`, the
+default and the greedy choice, or the longest step that lowers the residual with `scan=:longest`.
+The longest step may lower the residual less now and leave room for longer steps after it, in the
+spirit of the delayed gratification of Transtrum, Machta and Sethna [16], who take the smallest
+damping of Levenberg–Marquardt that does not move uphill.
 
 ```julia
 x = [2.5, 2.0]
@@ -226,6 +229,59 @@ equations it only costs more. Three options shape the search.
 ![The two rules and the three options](examples/figures/update_rules.png)
 
 Script: [`examples/update_rules.jl`](examples/update_rules.jl).
+
+## The longest step
+
+A narrow valley that bends is hard for the hookstep. Along its floor the linear model sees a straight
+valley, a long step leaves the true one, and the trust region shrinks until the steps follow the bend.
+The two equations
+
+```julia
+function valley!(out, x)
+    s      = x[2] - x[1]^3 + 1.5x[1]
+    out[1] = s
+    out[2] = s - 1e-3*x[1]
+    return out
+end
+```
+
+have one root, at the origin, at the end of a valley along the cubic x₂ = x₁³ - 3x₁/2, a thousandth
+wide. From `(-0.7, 0.8)` the rule `trust=:classical` crawls along the valley in steps shorter than a
+hundredth. A scan that keeps the longest step that lowers the residual follows it in a few steps
+longer than a tenth, as the delayed gratification of Transtrum, Machta and Sethna [16] would.
+
+```julia
+x = [-0.7, 0.8]
+nkroot!(valley!, x; jacobian=:ad, Δ=1.0, tol=1e-12, maxiter=500, trust=:scan, scan=:longest, verbose=false)
+```
+
+![The routes of trust=:classical and scan=:longest along a narrow bent valley](examples/figures/longest.png)
+
+The circles are the trust regions of the accepted steps. With `trust=:classical` the search takes more than
+170 Newton steps, and with `scan=:longest` fewer than ten, at less than half the residuals and a
+tenth of the products with the Jacobian. The greedy scan crawls as well, at
+ten times the residuals of `trust=:classical`.
+
+Script: [`examples/longest.jl`](examples/longest.jl).
+
+## Without a trust region
+
+The trust region is one way to reach a root from afar, and two others are at hand. With
+`globalisation=:backtracking` the search halves the GMRES step until its ratio exceeds `eta`. The step
+keeps the direction of the Newton step and only grows shorter, where the hookstep also turns towards
+the steepest descent of $\|F\|$. With `globalisation=:none` the search takes the GMRES step as it is,
+which is classical Newton.
+
+```julia
+arctan!(out, x) = (out .= atan.(x); out)
+x = fill(10.0, 3)
+nkroot!(arctan!, x; jacobian=:ad, globalisation=:backtracking, maxiter=50, verbose=false)
+```
+
+From x = 10 the Newton step of arctan overshoots, and classical Newton diverges, while backtracking
+reaches the root. A trial costs one residual, as for the hookstep, and a shortened step is called
+`"line"`. In the printed table the column Δ becomes λ, the fraction of the GMRES step taken. `Δmax`
+caps the step, while `Δ`, `trust` and `scan` play no part.
 
 ## The Krylov space
 
@@ -284,7 +340,7 @@ trace.products       # Jacobian products, cumulative
 trace.residuals      # residuals, cumulative
 trace.preconditioner # applications of M⁻¹, cumulative
 trace.krylov         # the GMRES residual after each Arnoldi step, for each Newton step
-trace.step           # "newton" or "hook"
+trace.step           # "newton", "hook" or "line"
 trace.radius         # the radius of each accepted step
 trace.steplength     # its length
 trace.ratio          # its ratio
@@ -549,7 +605,7 @@ the trial gives another,
 
 $$\text{predicted} = \beta^2 - \|\beta e_1 - Hy\|^2, \qquad \text{actual} = \|r\|^2 - \|F(x + \delta)\|^2, \qquad \rho = \frac{\text{actual}}{\text{predicted}}.$$
 
-A ratio near one says that the model holds at this distance. With `trust=:ratio` the search reads
+A ratio near one says that the model holds at this distance. With `trust=:classical` the search reads
 this table after each trial.
 
 | ratio | the step | the radius |
@@ -567,10 +623,10 @@ of the same point. If the radius falls to the rounding of $x$, the search stops 
 the model lowers $\|F\|$.
 
 With `trust=:scan` the same space is used differently. The hooksteps at the radii $\Delta p$, with
-$p = 1/8$ to $4$ in steps of $\sqrt 2$, are all tried, capped by `Δmax` and by the length of the GMRES
-step. Among those with ρ > `eta` the search keeps the one of smallest residual, `scan=:residual`,
+$p = 1/8$ to $8$ in steps of $\sqrt 2$, are all tried, capped by `Δmax` and by the length of the GMRES
+step. Among those with ρ > `eta` the search keeps the one of smallest residual, `scan=:greedy`,
 or the one of largest radius, `scan=:longest`, and the next radius is the length of that step. A scan
-costs up to eleven residuals and no more products.
+costs up to thirteen residuals and no more products.
 
 ### How well to solve the Newton system
 
@@ -659,8 +715,9 @@ orthogonalised against many at once. The bases of MultipleShooting do this on th
 | `flexible` | `false` | keep the vectors `M⁻¹ qⱼ` for the length of the step | [Preconditioners](#preconditioners) |
 | `krylov_dim` | `50` | largest dimension of the Krylov space | [The Krylov space](#the-krylov-space) |
 | `krylov_tol` | `1e-3` | relative GMRES residual at which the space stops growing | [The Krylov space](#the-krylov-space) |
-| `trust` | `:ratio` | `:ratio` or `:scan`, the rule of the radius | [The radius](#the-radius) |
-| `scan` | `:residual` | `:residual` or `:longest`, the trial a scan keeps | [The radius](#the-radius) |
+| `globalisation` | `:hookstep` | `:hookstep`, `:backtracking` or `:none`, the rule of the step | [Without a trust region](#without-a-trust-region) |
+| `trust` | `:classical` | `:classical` or `:scan`, the rule of the radius | [The radius](#the-radius) |
+| `scan` | `:greedy` | `:greedy` or `:longest`, the trial a scan keeps | [The radius](#the-radius) |
 | `Δ` | `1e-2` | first radius of the trust region | [The radius](#the-radius) |
 | `Δmax` | `Inf` | largest radius | [The radius](#the-radius) |
 | `eta` | `1e-3` | smallest ratio for a step to be accepted | [The radius](#the-radius) |
@@ -693,14 +750,14 @@ and model trust regions. Knoll and Keyes [5] survey the approach, and Kelley [6]
 book. Dembo, Eisenstat and Steihaug [7] analyse how inexactly the Newton systems can be solved.
 Eisenstat and Walker [8] vary the tolerance from step to step, and this package keeps it constant.
 
-**The trust region.** Levenberg [9] and Marquardt [10] added the multiplier $\mu$ to the least-squares
-problem. Moré [11] gives its implementation and theory, and Moré and Sorensen [12] compute the
-constrained step. Dennis and Schnabel [13] call it the hook step. Conn, Gould and Toint [14] is the
-reference book. The rule `trust=:ratio` is the classical one, as in Algorithm 4.1 of Nocedal and
-Wright [15]. With `scan=:longest` the rule `trust=:scan` borrows the delayed gratification of
-Transtrum, Machta and Sethna [16], their section VIII C, who take the smallest damping of
-Levenberg–Marquardt that does not move uphill, so that the first steps do not drop to the floor of a
-narrow canyon, which would shorten the steps after them.
+**The trust region.** Levenberg [9] and Marquardt [10] added the multiplier $\mu$ to the
+least-squares problem. Moré [11] gives its implementation and theory, and Moré and Sorensen [12]
+compute the constrained step. Dennis and Schnabel [13] call it the hook step. Conn, Gould and Toint
+[14] is the reference book. The rule `trust=:classical` is Algorithm 4.1 of Nocedal and Wright [15].
+With `scan=:longest` the rule `trust=:scan` borrows the delayed gratification of Transtrum, Machta
+and Sethna [16], their section VIII C, who take the smallest damping of Levenberg–Marquardt that
+does not move uphill, so that the first steps do not drop to the floor of a narrow canyon, which
+would shorten the steps after them.
 
 **The hookstep in a Krylov space.** Brown and Saad [3] pose the model trust region problem in a Krylov
 space, and work with the dogleg, an approximation of the hookstep. Viswanath [17] computes the

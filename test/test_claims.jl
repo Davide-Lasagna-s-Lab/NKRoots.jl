@@ -319,7 +319,7 @@ end
 
     @testset "a Jacobian that vanishes ends the search, at any radius" begin
         flat!(out, x) = (out[1] = x[1]^2 + 1; out)
-        for Δ in (1.0, Inf), trust in (:ratio, :scan)
+        for Δ in (1.0, Inf), trust in (:classical, :scan)
             @test search(flat!, [0.0]; jacobian=:ad, Δ=Δ, Δmax=Δ, trust=trust).out.status === :collapsed
         end
     end
@@ -371,8 +371,113 @@ end
         end
     end
 
-    @testset "scan must be :residual or :longest" begin
+    @testset "scan must be :greedy or :longest" begin
         @test_throws ArgumentError search(two!, [2.5, 2.0]; jacobian=:ad, trust=:scan, scan=:largest)
+    end
+end
+
+
+@testset "the longest step" begin
+    function valley!(out, x)
+        s      = x[2] - x[1]^3 + 1.5x[1]
+        out[1] = s
+        out[2] = s - 1e-3*x[1]
+        return out
+    end
+    run(; kw...) = search(valley!, [-0.7, 0.8]; jacobian=:ad, Δ=1.0, tol=1e-12, maxiter=500, kw...)
+    classical = run(trust=:classical)
+    longest   = run(trust=:scan, scan=:longest)
+    greedy    = run(trust=:scan, scan=:greedy)
+
+    @testset "the root is the origin, and every rule finds it" begin
+        for s in (classical, longest, greedy)
+            @test s.out.status === :converged
+            @test norm(s.x) < 1e-8 # ‖F‖ < 10⁻¹² holds within 10⁻⁹ of the root, along the shear
+        end
+    end
+
+    @testset "trust=:classical crawls in steps shorter than a hundredth" begin
+        @test classical.out.iter > 170
+        @test sort(classical.trace.steplength[2:end])[end ÷ 2] < 1e-2
+    end
+
+    @testset "scan=:longest takes fewer than ten steps, some longer than a tenth" begin
+        @test longest.out.iter < 10
+        @test count(>(0.1), longest.trace.steplength[2:end]) >= 2
+    end
+
+    @testset "at less than half the residuals and a tenth of the products" begin
+        @test longest.trace.residuals[end] < classical.trace.residuals[end] / 2
+        @test longest.trace.products[end] < classical.trace.products[end] / 10
+    end
+
+    @testset "the greedy scan crawls too, at ten times the residuals" begin
+        @test greedy.out.iter > 170
+        @test greedy.trace.residuals[end] > 8 * classical.trace.residuals[end]
+    end
+end
+
+
+@testset "without a trust region" begin
+    arctan!(out, x) = (out .= atan.(x); out)
+
+    @testset "backtracking reaches the root of arctan from 10, where classical Newton diverges" begin
+        line = search(arctan!, fill(10.0, 3); jacobian=:ad, globalisation=:backtracking, maxiter=50)
+        none = search(arctan!, fill(10.0, 3); jacobian=:ad, globalisation=:none, maxiter=50)
+        @test line.out.status === :converged
+        @test norm(line.x) < 1e-10
+        @test none.out.status !== :converged
+    end
+
+    @testset "it halves the GMRES step until the ratio exceeds eta, and calls it a line" begin
+        t = search(arctan!, fill(10.0, 3); jacobian=:ad, globalisation=:backtracking, maxiter=50).trace
+        @test "line" in t.step
+        @test all(>(1e-3), t.ratio[2:end])
+        for k in 2:length(t.res)
+            lengths = [first.(t.trials[k]); t.radius[k]]
+            @test all(isapprox.(lengths[1:end - 1] ./ lengths[2:end], 2; rtol=1e-12))
+            @test all(!(ρ > 1e-3) for (_, ρ) in t.trials[k])
+        end
+    end
+
+    @testset "the step keeps the direction of the Newton step, only shorter" begin
+        x₀   = [10.0, -4.0]
+        line = search(arctan!, x₀; jacobian=:ad, globalisation=:backtracking, maxiter=1)
+        none = search(arctan!, x₀; jacobian=:ad, globalisation=:none, maxiter=1)
+        δl   = line.x .- x₀
+        δn   = none.x .- x₀
+        @test norm(δl) < norm(δn)
+        @test abs(dot(δl, δn)) ≈ norm(δl)*norm(δn)
+    end
+
+    @testset "classical Newton takes every GMRES step, quadratically near the root" begin
+        t = search(two!, [1.8, 0.7]; jacobian=:ad, globalisation=:none, tol=1e-12).trace
+        @test all(==(0), t.rejected)
+        @test all(==("newton"), t.step[2:end])
+        @test t.res[end] < 1e-12
+    end
+
+    @testset "Δmax caps the step, and Δ, trust and scan play no part" begin
+        t = search(arctan!, fill(10.0, 3); jacobian=:ad, globalisation=:backtracking, Δmax=0.5,
+                   maxiter=100).trace
+        @test all(t.steplength[2:end] .<= 0.5*(1 + 1e-12))
+        a = search(arctan!, fill(10.0, 3); jacobian=:ad, globalisation=:backtracking, maxiter=50)
+        b = search(arctan!, fill(10.0, 3); jacobian=:ad, globalisation=:backtracking, maxiter=50,
+                   Δ=1e-6, trust=:scan, scan=:longest)
+        @test a.x == b.x
+        @test a.trace.res == b.trace.res
+    end
+
+    @testset "the printed table shows λ in place of Δ, and the shortened steps" begin
+        io = IOBuffer()
+        nkroot!(arctan!, fill(10.0, 3); jacobian=:ad, globalisation=:backtracking, maxiter=50, io=io)
+        lines = split(String(take!(io)), "\n")
+        @test occursin("λ", lines[2]) && !occursin("Δ", lines[2])
+        @test any(occursin("↓ line", l) for l in lines)
+    end
+
+    @testset "globalisation must be :hookstep, :backtracking or :none" begin
+        @test_throws ArgumentError search(two!, [2.5, 2.0]; jacobian=:ad, globalisation=:linesearch)
     end
 end
 

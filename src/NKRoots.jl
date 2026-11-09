@@ -3,11 +3,14 @@ module NKRoots
 using LinearAlgebra
 using Printf
 
-include("arnoldi.jl")
+include("krylov.jl")
+include("preconditioner.jl")
 include("hookstep.jl")
-include("trust.jl")
-include("jacobian.jl")
+include("model.jl")
+include("globalisation.jl")
+include("output.jl")
 include("solver.jl")
+include("jacobian.jl")
 include("trace.jl")
 
 end

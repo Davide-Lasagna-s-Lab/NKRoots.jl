@@ -14,11 +14,11 @@ after every iteration it records
   residual, of products with the Jacobian and of applications of the preconditioner;
 - `krylov`, the relative residual of the GMRES solution of the Newton system after each Arnoldi
   step of the iteration (empty at the start);
-- `step`, `"newton"` if the accepted step is the GMRES step inside the trust region, `"hook"` if
-  it lies on its boundary (empty at the start);
-- `radius`, the trust-region radius with which the accepted step was computed (at the start, the
-  initial radius), `steplength`, the length of that step, and `ratio`, the ratio of the actual to
-  the predicted reduction of `‖r‖²`;
+- `step`, `"newton"` if the accepted step is the GMRES step, `"hook"` if it lies on the boundary
+  of the trust region, `"line"` if backtracking has shortened it (empty at the start);
+- `radius`, the trust-region radius with which the accepted step was computed, or its length
+  without a trust region (at the start, the initial radius), `steplength`, the length of that
+  step, and `ratio`, the ratio of the actual to the predicted reduction of `‖r‖²`;
 - `rejected`, the number of trials with a ratio below `eta`, and `trials`, the radius and the
   ratio of every trial but the accepted one, in order;
 - `x`, a copy of the iterate, only with `keep=true`.
@@ -42,7 +42,7 @@ struct Trace
           products::Vector{Int}                            # Jacobian products, cumulative
     preconditioner::Vector{Int}                            # preconditioner applications, cumulative
             krylov::Vector{Vector{Float64}}                # relative GMRES residuals of the iteration
-              step::Vector{String}                         # "newton" or "hook"
+              step::Vector{String}                         # "newton", "hook" or "line"
             radius::Vector{Float64}                        # radius of the accepted step
         steplength::Vector{Float64}                        # length of the accepted step
              ratio::Vector{Float64}                        # actual over predicted reduction of ‖r‖²

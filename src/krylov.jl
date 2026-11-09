@@ -1,7 +1,8 @@
-# Arnoldi iteration, as in ReSolver.jl.
+# The Krylov space: the Arnoldi iteration, as in ReSolver.jl, and the Givens rotations that follow the
+# residual of its least-squares problem.
 #
-# Builds an orthonormal basis Q of the Krylov space of the operator A from b, one vector per call
-# to `step!`, and the upper Hessenberg matrix H with A Qₙ = Qₙ₊₁ H.
+# The iteration builds an orthonormal basis Q of the Krylov space of the operator A from b, one vector
+# per call to `step!`, and the upper Hessenberg matrix H with A Qₙ = Qₙ₊₁ H.
 #
 # Interface: the vectors broadcast and support `norm`, `dot` and `similar`; the operator is called
 # in place as `A(out, v)`.

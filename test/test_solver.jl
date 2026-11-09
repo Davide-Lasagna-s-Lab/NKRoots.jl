@@ -21,7 +21,7 @@ LinearAlgebra.ldiv!(out, M::DiagonalPrecond, v) = (out .= v ./ M.d; out)
 NKRoots.gram(M::DiagonalPrecond, Q) = [dot(Q[i] ./ M.d, Q[j] ./ M.d) for i in eachindex(Q), j in eachindex(Q)]
 
 @testset "test 1                                   " begin
-    for jacobian in (:ad, :fd), trust in (:ratio, :scan)
+    for jacobian in (:ad, :fd), trust in (:classical, :scan)
         x    = Float64[2.0]
         data = Float64[]
         out  = nkroot!(test1, x; jacobian=jacobian, trust=trust, Δ=1.0, verbose=false,
@@ -33,7 +33,7 @@ NKRoots.gram(M::DiagonalPrecond, Q) = [dot(Q[i] ./ M.d, Q[j] ./ M.d) for i in ea
 end
 
 @testset "Broyden tridiagonal                      " begin
-    for trust in (:ratio, :scan), precond in (nothing, DiagonalPrecond(fill(3.0, 50)))
+    for trust in (:classical, :scan), precond in (nothing, DiagonalPrecond(fill(3.0, 50)))
         x   = fill(-1.0, 50)
         out = nkroot!(broyden!, x; trust=trust, precond=precond, Δ=0.1, maxiter=50, krylov_tol=1e-6,
                       tol=1e-10, verbose=false)
