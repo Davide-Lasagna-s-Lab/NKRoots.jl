@@ -44,18 +44,17 @@
 #                  computed in the same Krylov space, without new products with J.
 #   trust=:scan    a trial costs one residual against the products of the whole Krylov space, so
 #                  the hooksteps at the radii Δ p, p = 1/8 to 4 in steps of √2 (capped by `Δmax` and
-#                  by the length of the GMRES step), are all tried; the one of smallest residual
-#                  among those with ρ > `eta` is accepted, and the next iteration starts from the
-#                  length of its step. If none is accepted, the scan starts again below.
+#                  by the length of the GMRES step), are all tried; among those with ρ > `eta` the
+#                  one of smallest residual is accepted, scan=:residual, or the longest,
+#                  scan=:longest, and the next iteration starts from the length of its step. If none
+#                  is accepted, the scan starts again below.
+# The rules are in trust.jl.
 
 export nkroot!, update!, gram
 
-# the factors of the radius tried by trust=:scan, 1/8 to 4 in steps of √2
-const SCAN = 2.0 .^ (-3:0.5:2)
-
 """
     nkroot!(F!, J, x; precond=nothing, flexible=false, krylov_dim=50, krylov_tol=1e-3,
-            Δ=1e-2, Δmax=Inf, eta=1e-3, maxiter=20, tol=1e-10, trust=:ratio,
+            Δ=1e-2, Δmax=Inf, eta=1e-3, maxiter=20, tol=1e-10, trust=:ratio, scan=:residual,
             verbose=true, io=stdout, callback=info -> false) -> (; status, iter, res)
 
 Solve `F(x) = 0` by the Newton–Krylov hookstep from the guess `x`, overwritten with the root.
@@ -76,7 +75,9 @@ Solve `F(x) = 0` by the Newton–Krylov hookstep from the guess `x`, overwritten
 - `Δ`, `Δmax`: initial and largest trust-region radius. `eta`: smallest ratio of the actual to
   the predicted reduction of `‖r‖²` for a step to be accepted.
 - `trust=:ratio` updates the radius from the ratio of each trial; `trust=:scan` tries several radii
-  in the same Krylov space and keeps the best.
+  in the same Krylov space and keeps, among the trials with a ratio above `eta`, the one of smallest
+  residual, `scan=:residual`, or the longest step, `scan=:longest`, which may lower the residual
+  less now and leave room for longer steps after it.
 - The search stops when `‖r‖ < tol`, after `maxiter` iterations, when the trust region collapses,
   or when `callback(info)` returns `true`, called at the start and after every iteration with
   `info = (; iter, x, res, evaluations, krylov, step, radius, steplength, ratio, rejected, trials)`:
@@ -97,6 +98,7 @@ function nkroot!(F!, J, x; precond=nothing,
                            maxiter::Int=20,
                            tol::Real=1e-10,
                            trust::Symbol=:ratio,
+                           scan::Symbol=:residual,
                            verbose::Bool=true,
                            io::IO=stdout,
                            callback=info -> false)
@@ -104,6 +106,8 @@ function nkroot!(F!, J, x; precond=nothing,
     # ---- input checks ----
     trust in (:ratio, :scan) ||
         throw(ArgumentError("trust must be :ratio or :scan"))
+    scan in (:residual, :longest) ||
+        throw(ArgumentError("scan must be :residual or :longest"))
 
     # ---- the first radius obeys the largest one, as all the others do ----
     Δ = min(Δ, Δmax)
@@ -201,7 +205,7 @@ function nkroot!(F!, J, x; precond=nothing,
         # ---- trust region: the accepted trial, by the update rule of `trust` ----
         Δmin = eps() * (1 + norm(x))
         t    = trust === :ratio ? _ratio(trial!, hook, len, Δ, Δmax, eta, Δmin, xn, rn) :
-                                  _scan(trial!, hook, len, Δ, Δmax, eta, Δmin, xn, rn, xb, rb)
+                                  _scan(trial!, hook, len, Δ, Δmax, eta, Δmin, xn, rn, xb, rb, scan)
         Δ    = t.Δ
         t.accepted || (status = :collapsed; break)
         x   .= t.x
@@ -223,101 +227,22 @@ function nkroot!(F!, J, x; precond=nothing,
 end
 
 
-# ---------------------------------------------------------------------------- #
-# trust-region update rules                                                    #
-# ---------------------------------------------------------------------------- #
-# Each rule tries hooksteps in the Krylov space of one Newton system, by `trial!(xn, rn, y)`, which
-# writes the trial point and its residual and returns the norm of the residual and the ratio ρ,
-# until it accepts one. It returns the accepted trial: its coordinates `y`, whether it lies on the
-# boundary `at`, its ratio `ρ`, the radius `used` with which it was computed, the radius `Δ` of the
-# next iteration, its point `x`, residual `r` and residual norm `res`, and the radius and ratio of
-# every other trial; or `accepted = false` when the radius falls below `Δmin`.
-
-# trust=:ratio: from the ratio of each trial, Δ shrinks by 4 below 1/4 and doubles above 3/4 on the
-# boundary; the first trial with ρ > eta is accepted, the others give a shorter hookstep. A rejected
-# step inside the region is the same for every radius above its length, so Δ falls below that
-# length at once, with no new residual of the same point. A radius that stays infinite after a
-# rejection has no shorter step to give, and the region has collapsed
-function _ratio(trial!, hook, len, Δ, Δmax, eta, Δmin, xn, rn)
-    trials = Tuple{Float64, Float64}[]
-    used   = Δ
-    y, at  = hook(Δ)
-    while true
-        res, ρ = trial!(xn, rn, y)
-
-        # radius update; a ratio that is not a number counts as a poor step, and a rejected trial
-        # shrinks the radius whatever eta is, or the same trial would come back
-        if !(ρ >= 1/4) || !(ρ > eta)
-            Δ /= 4
-        elseif ρ > 3/4 && at
-            Δ = min(2Δ, Δmax)
-        end
-
-        # accepted, or a shorter hookstep in the same space unless the region has collapsed
-        ρ > eta && return (accepted=true, y=y, at=at, ρ=ρ, used=used, Δ=Δ, x=xn, r=rn, res=res, trials=trials)
-        push!(trials, (used, ρ))
-        if !at
-            ℓ = len(y)
-            isinf(Δ) && (Δ = ℓ)
-            while Δ >= max(ℓ, Δmin)
-                Δ /= 4
-            end
-        end
-        Δmin <= Δ < Inf || return (accepted=false, y=y, at=at, ρ=ρ, used=used, Δ=Δ, x=xn, r=rn, res=res, trials=trials)
-        y, at = hook(Δ)
-        used  = Δ
-    end
-end
-
-# trust=:scan: the hooksteps at the radii Δ p for the factors p of SCAN, capped by Δmax and by the
-# length of the GMRES step, which every larger radius gives; the trial of smallest residual among
-# those with ρ > eta is accepted, and the next radius is the length of its step. If none has
-# ρ > eta, the scan starts again below the smallest radius tried
-function _scan(trial!, hook, len, Δ, Δmax, eta, Δmin, xn, rn, xb, rb)
-    yN, _ = hook(Inf)
-    ℓN    = isfinite(len(yN)) ? len(yN) : Inf
-    tried = Tuple{Float64, Float64}[] # radius and ratio of every trial
-    while true
-        best = 0          # the best trial of this scan
-        resb = Inf        # its residual norm
-        yb   = yN         # its coordinates
-        atb  = false      # and whether it lies on the boundary
-        for ρr in unique(min.(Δ .* SCAN, Δmax, ℓN))
-            yr, at = hook(ρr)
-            res, q = trial!(xn, rn, yr)
-            push!(tried, (ρr, q))
-            if q > eta && res < resb
-                best = length(tried)
-                resb = res
-                yb   = yr
-                atb  = at
-                xb  .= xn
-                rb  .= rn
-            end
-        end
-
-        # the best trial, or a scan below the smallest radius tried unless the region has collapsed
-        best > 0 && return (accepted=true, y=yb, at=atb, ρ=tried[best][2], used=tried[best][1],
-                            Δ=min(len(yb), Δmax), x=xb, r=rb, res=resb, trials=tried[[1:best - 1; best + 1:end]])
-        Δ = minimum(first.(tried)) / 8
-        Δmin <= Δ < Inf || return (accepted=false, y=yb, at=atb, ρ=NaN, used=Δ, Δ=Δ, x=xb, r=rb, res=resb, trials=tried)
-    end
-end
-
 """
-    nkroot!(F!, x; jacobian=:fd, ϵ=nothing, kwargs...)
+    nkroot!(F!, x; jacobian=:fd, difference=:forward, ϵ=nothing, kwargs...)
 
-As `nkroot!(F!, J, x; kwargs...)` with the Jacobian by finite differences of `F!` (`jacobian=:fd`)
-or by dual numbers (`jacobian=:ad`). The finite difference takes the step of NITSOL, from the
-machine precision and the norm of `x`, unless `ϵ` sets a relative step (see [`jacobianFD`](@ref)).
+As `nkroot!(F!, J, x; kwargs...)` with the Jacobian by finite differences of `F!` (`jacobian=:fd`),
+forward or central as `difference` says, or by dual numbers (`jacobian=:ad`). The finite difference
+takes its relative step from the machine precision, unless `ϵ` sets it (see [`jacobianFD`](@ref)).
 """
-function nkroot!(F!, x; jacobian::Symbol=:fd, ϵ::Union{Real, Nothing}=nothing, kwargs...)
+function nkroot!(F!, x; jacobian::Symbol=:fd,
+                        difference::Symbol=:forward,
+                        ϵ::Union{Real, Nothing}=nothing,
+                        kwargs...)
     # ---- input checks ----
     jacobian in (:fd, :ad) ||
         throw(ArgumentError("jacobian must be :fd or :ad"))
 
-    J = jacobian === :ad ? jacobianAD(F!, x) :
-        ϵ === nothing    ? jacobianFD(F!, x) : jacobianFD(F!, x, ϵ; step_size=Average())
+    J = jacobian === :ad ? jacobianAD(F!, x) : jacobianFD(F!, x; difference=difference, ϵ=ϵ)
     return nkroot!(F!, J, x; kwargs...)
 end
 

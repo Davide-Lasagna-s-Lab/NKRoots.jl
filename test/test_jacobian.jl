@@ -14,6 +14,15 @@ end
     x .*= 2.0
     update!(J, x, test(similar(x), x))
     @test norm(J*[1.0] - [8.0]) < 1e-5
+
+    # the central difference is exact for a quadratic, up to rounding
+    J = jacobianFD(test, [2.0]; difference=:central)
+    @test norm(J*[1.0] - [4.0]) < 1e-9
+    @test norm(J*[0.0]) == 0
+
+    # a relative step sets the step, and an unknown difference is refused
+    @test abs((jacobianFD(test, [2.0]; ϵ=1e-2)*[1.0])[1] - 4.0) > 1e-3
+    @test_throws ArgumentError jacobianFD(test, [2.0]; difference=:backward)
 end
 
 @testset "jacobianAD                               " begin

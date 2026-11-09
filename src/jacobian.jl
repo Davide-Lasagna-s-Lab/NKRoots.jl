@@ -38,60 +38,95 @@ end
 
 Base.:*(op::JacobianAD, y) = mul!(similar(y), op, y)
 
-# type interface to allow dispatch on method to determine FD step size
-abstract type EpsilonMethod end
-struct Average <: EpsilonMethod end
-struct Nitsol <: EpsilonMethod end
-
-# Object to approximate the action of the jacobian of a function
-# using a finite difference quotient.
-# Assumes F obeys :
-# F(out, x)
-# and overwrites `out` with F(x), returning out
-struct JacobianFD{X, FT, STEP}
-      F::FT          # operator
-      x::X           # point at which the derivative is taken
-     Fx::X           # value of the function at `x`
-    tmp::Tuple{X, X} # temporaries
-      ϵ::Float64     # finite difference step
+# Object to approximate the action of the Jacobian of a function by a finite difference quotient,
+# forward or central,
+#
+#     J y ≈ (F(x + ε y) - F(x))/ε             forward, first order
+#     J y ≈ (F(x + ε y) - F(x - ε y))/(2ε)    central, second order
+#
+# with the step ε = δ (1 + ‖x‖)/‖y‖. By default δ = eps^(1/2) forward and eps^(1/3) central, with eps
+# the machine precision of the vectors, each balancing the truncation error of the quotient against
+# the rounding of F. For a quadratic F the central difference is exact up to rounding. The residual
+# itself is not approximated, so that a root found with this Jacobian satisfies the equations to the
+# same tolerance. A forward product evaluates F once, with F(x) set by update! at no cost, a central
+# one twice. F obeys F(out, x), and overwrites out with F(x), returning out.
+struct JacobianFD{FT, X}
+             F::FT      # the function, F(out, x) -> out
+             x::X       # the point at which the derivative is taken
+            Fx::X       # F at x, for forward differences
+           tmp::X       # the perturbed point x ± ε y
+          work::X       # F at x - ε y, for central differences
+    difference::Symbol  # :forward or :central
+             δ::Float64 # the relative step
 end
 
 """
-    jacobianFD(F, x, ϵ=1e-6; step_size=Nitsol())
+    jacobianFD(F, x; difference=:forward, ϵ=nothing)
 
-The Jacobian of `F` at `x` by a forward difference quotient, `J y ≈ (F(x + δ y) - F(x))/δ`,
-with δ from `step_size` (see page 363 of
-https://www.sciencedirect.com/science/article/pii/S0021999103004340). `update!(J, x, r)` moves it
-to `x`, with `r = F(x)`, without a new evaluation of `F`.
+The Jacobian of `F` at `x` by a finite difference quotient of `F`, matrix free,
+
+    J y ≈ (F(x + ε y) - F(x))/ε               difference=:forward, first order
+    J y ≈ (F(x + ε y) - F(x - ε y))/(2ε)      difference=:central, second order
+
+with the step ε = δ (1 + ‖x‖)/‖y‖. The relative step δ is `ϵ` or, by default, the square root of the
+machine precision of the vectors for forward differences and its cube root for central ones. A
+forward product evaluates `F` once, a central one twice. `update!(J, x, r)` moves it to the point
+`x`, with `r = F(x)`, without a new evaluation of `F`.
+
+# Arguments
+- `F`: the function, called as `F(out, x)`, which overwrites `out` with `F(x)` and returns it.
+- `x`: the point, copied; `F` is evaluated there once.
+- `difference::Symbol=:forward`: `:forward` or `:central`.
+- `ϵ`: the relative step δ, or `nothing` for the default.
 """
-jacobianFD(F, x, ϵ::Real=1e-6; step_size::EpsilonMethod=Nitsol()) =
-    JacobianFD{typeof(x), typeof(F), typeof(step_size)}(F, copy(x), F(similar(x), x), (similar(x), similar(x)), ϵ)
+function jacobianFD(F, x; difference::Symbol=:forward, ϵ::Union{Real, Nothing}=nothing)
+    # ---- input checks ----
+    difference in (:forward, :central) ||
+        throw(ArgumentError("difference must be :forward or :central"))
 
-_get_step(op::JacobianFD{<:Any, <:Any, Average}, y) = (1/(length(op.x)*norm(y)))*sum(op.ϵ.*abs.(op.x)) + op.ϵ
-_get_step(op::JacobianFD{<:Any, <:Any, Nitsol}, y) = sqrt((1 + norm(op.x))*eps(Float64))/norm(y)
+    # ---- the relative step, from the precision of the vectors if they have one ----
+    T = eltype(x) <: Number ? real(eltype(x)) : Float64
+    δ = ϵ === nothing ? eps(T)^(difference === :forward ? 1/2 : 1/3) : ϵ
+
+    return JacobianFD(F,
+                      copy(x),
+                      F(similar(x), x),
+                      similar(x),
+                      similar(x),
+                      difference,
+                      Float64(δ))
+end
 
 # linearise at x, with r = F(x)
 update!(J::JacobianFD, x, r) = (J.x .= x; J.Fx .= r; J)
 
-# jacobian-vector product
-function LinearAlgebra.mul!(out, op::JacobianFD, y)
-    # aliases
-     x_plus_y = op.tmp[1]
-    Fx_plus_y = op.tmp[2]
+# the product by the difference quotient, written into out
+function LinearAlgebra.mul!(out, J::JacobianFD, y)
+    ny = norm(y)
 
-    # if perturbation is zero set output to zero
-    if norm(y) == 0
-        out .= zero(out)
+    # ---- a zero direction has a zero product ----
+    if ny == 0
+        out .= 0 .* y
         return out
     end
 
-    # perturbed input, and the finite difference quotient
-    δ = _get_step(op, y)
-    x_plus_y .= op.x .+ δ .* y
-    op.F(Fx_plus_y, x_plus_y)
-    out .= (Fx_plus_y .- op.Fx) ./ δ
+    # ---- F at x + ε y ----
+    ε      = J.δ*(1 + norm(J.x))/ny
+    J.tmp .= J.x .+ ε .* y
+    J.F(out, J.tmp)
+
+    # ---- the forward difference, with F(x) from the point of J ----
+    if J.difference === :forward
+        out .= (out .- J.Fx) ./ ε
+        return out
+    end
+
+    # ---- the central difference, with F at x - ε y ----
+    J.tmp .= J.x .- ε .* y
+    J.F(J.work, J.tmp)
+    out .= (out .- J.work) ./ (2ε)
 
     return out
 end
 
-Base.:*(op::JacobianFD, y) = mul!(similar(y), op, y)
+Base.:*(J::JacobianFD, y) = mul!(similar(y), J, y)

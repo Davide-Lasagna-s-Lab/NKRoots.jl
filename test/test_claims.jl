@@ -174,7 +174,7 @@ end
     @testset "ϵ sets the relative step of the finite difference" begin
         x      = [1.8, 0.7]
         exact  = jacobian_two(x)*[1.0, 0.0]
-        rough  = jacobianFD(two!, x, 1e-2; step_size=NKRoots.Average())*[1.0, 0.0]
+        rough  = jacobianFD(two!, x; ϵ=1e-2)*[1.0, 0.0]
         smooth = jacobianFD(two!, x)*[1.0, 0.0]
         @test 1e-4 < norm(rough - exact) < 1e-1
         @test norm(smooth - exact) < 1e-6
@@ -352,6 +352,27 @@ end
         @test scan.trace.res[2] <= ratio.trace.res[2] # the scan holds the trial on Δ itself
         @test scan.trace.residuals[end] > ratio.trace.residuals[end]
         @test diff(scan.trace.products)[1] == diff(ratio.trace.products)[1]
+    end
+
+    @testset "scan=:longest finds the same root and keeps the longest step that lowers ‖F‖" begin
+        best    = search(two!, [2.5, 2.0]; jacobian=:ad, Δ=1.0, tol=1e-12, trust=:scan)
+        longest = search(two!, [2.5, 2.0]; jacobian=:ad, Δ=1.0, tol=1e-12, trust=:scan, scan=:longest)
+        @test longest.out.status === :converged
+        @test norm(best.x - longest.x) < 1e-10
+
+        # the same trials at the first step, from the same Krylov space: the longest is kept
+        @test longest.trace.radius[2] >= best.trace.radius[2]
+        @test longest.trace.res[2] >= best.trace.res[2]
+
+        # no trial longer than the accepted one lowers ‖F‖
+        t = longest.trace
+        for k in 2:length(t.res), (Δ, ρ) in t.trials[k]
+            @test Δ < t.radius[k] || !(ρ > 1e-3)
+        end
+    end
+
+    @testset "scan must be :residual or :longest" begin
+        @test_throws ArgumentError search(two!, [2.5, 2.0]; jacobian=:ad, trust=:scan, scan=:largest)
     end
 end
 

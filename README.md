@@ -104,8 +104,8 @@ Script: [`examples/route.jl`](examples/route.jl).
 
 ## The Jacobian
 
-There are three ways to give it. A finite difference is the default, `jacobian=:ad` uses dual numbers,
-and any object with `mul!` will do. `update!(J, x, r)` moves your own object to the point `x`, with
+There are three ways to give it. A finite difference is the default, forward or central, `jacobian=:ad`
+uses dual numbers, and any object with `mul!` will do. `update!(J, x, r)` moves your own object to the point `x`, with
 `r = F(x)`, at the start of every Newton step.
 
 ```julia
@@ -117,6 +117,8 @@ x = [1.8, 0.7]
 nkroot!(two!, x; jacobian=:ad, Δ=0.1, verbose=false)          # dual numbers
 x = [1.8, 0.7]
 nkroot!(two!, x; jacobian=:fd, ϵ=1e-2, Δ=0.1, verbose=false)  # a relative step for the difference
+x = [1.8, 0.7]
+nkroot!(two!, x; jacobian=:fd, difference=:central, Δ=0.1, verbose=false)  # central differences
 
 struct TwoJacobian
     A::Matrix{Float64} # the matrix at the last point
@@ -202,7 +204,11 @@ Script: [`examples/hookstep.jl`](examples/hookstep.jl).
 With `trust=:ratio`, the default, the radius moves after each trial. It shrinks by four below
 ρ = 1/4 and doubles above ρ = 3/4 on the boundary. With `trust=:scan` the hooksteps at the radii Δ/8
 to 4Δ in steps of √2 are all tried in the same Krylov space, and the best is kept. The next radius is
-the length of that step.
+the length of that step. The best is the trial of smallest residual with `scan=:residual`, the
+default, or the longest step that lowers the residual with `scan=:longest`. The longest step may
+lower the residual less now and leave room for longer steps after it, in the spirit of the delayed
+gratification of Transtrum, Machta and Sethna [16], who take the smallest damping of
+Levenberg–Marquardt that does not move uphill.
 
 ```julia
 x = [2.5, 2.0]
@@ -562,8 +568,9 @@ the model lowers $\|F\|$.
 
 With `trust=:scan` the same space is used differently. The hooksteps at the radii $\Delta p$, with
 $p = 1/8$ to $4$ in steps of $\sqrt 2$, are all tried, capped by `Δmax` and by the length of the GMRES
-step. Among those with ρ > `eta` the search keeps the one of smallest residual, and the next radius
-is the length of that step. A scan costs up to eleven residuals and no more products.
+step. Among those with ρ > `eta` the search keeps the one of smallest residual, `scan=:residual`,
+or the one of largest radius, `scan=:longest`, and the next radius is the length of that step. A scan
+costs up to eleven residuals and no more products.
 
 ### How well to solve the Newton system
 
@@ -653,6 +660,7 @@ orthogonalised against many at once. The bases of MultipleShooting do this on th
 | `krylov_dim` | `50` | largest dimension of the Krylov space | [The Krylov space](#the-krylov-space) |
 | `krylov_tol` | `1e-3` | relative GMRES residual at which the space stops growing | [The Krylov space](#the-krylov-space) |
 | `trust` | `:ratio` | `:ratio` or `:scan`, the rule of the radius | [The radius](#the-radius) |
+| `scan` | `:residual` | `:residual` or `:longest`, the trial a scan keeps | [The radius](#the-radius) |
 | `Δ` | `1e-2` | first radius of the trust region | [The radius](#the-radius) |
 | `Δmax` | `Inf` | largest radius | [The radius](#the-radius) |
 | `eta` | `1e-3` | smallest ratio for a step to be accepted | [The radius](#the-radius) |
@@ -689,28 +697,31 @@ Eisenstat and Walker [8] vary the tolerance from step to step, and this package 
 problem. Moré [11] gives its implementation and theory, and Moré and Sorensen [12] compute the
 constrained step. Dennis and Schnabel [13] call it the hook step. Conn, Gould and Toint [14] is the
 reference book. The rule `trust=:ratio` is the classical one, as in Algorithm 4.1 of Nocedal and
-Wright [15].
+Wright [15]. With `scan=:longest` the rule `trust=:scan` borrows the delayed gratification of
+Transtrum, Machta and Sethna [16], their section VIII C, who take the smallest damping of
+Levenberg–Marquardt that does not move uphill, so that the first steps do not drop to the floor of a
+narrow canyon, which would shorten the steps after them.
 
 **The hookstep in a Krylov space.** Brown and Saad [3] pose the model trust region problem in a Krylov
-space, and work with the dogleg, an approximation of the hookstep. Viswanath [16] computes the
+space, and work with the dogleg, an approximation of the hookstep. Viswanath [17] computes the
 hookstep itself in a Krylov space, to find periodic orbits of plane Couette flow, a problem where he
-finds that damped Newton steps fail. His later paper [17], in its section 5, gives the method in
+finds that damped Newton steps fail. His later paper [18], in its section 5, gives the method in
 detail, with the formula for $s_i(\mu)$ above and the stop on the residual of GMRES. He notes that no
 theory supports this stop, and that it works very well in practice. This package follows that recipe,
 and its code follows the `NewtonHookstep` of
 [ReSolver.jl](https://github.com/Davide-Lasagna-s-Lab/ReSolver.jl).
 
-**Preconditioning.** Flexible GMRES is due to Saad [18], who uses it for a preconditioner that changes
+**Preconditioning.** Flexible GMRES is due to Saad [19], who uses it for a preconditioner that changes
 from step to step. Here it also gives the metric of the step, as derived above.
 
-**The details.** Two passes of orthogonalisation are enough, as Giraud et al. [19] analyse for the
-classical process. The default step of the finite difference is that of NITSOL [20]. The relative step
+**The details.** Two passes of orthogonalisation are enough, as Giraud et al. [20] analyse for the
+classical process. The default step of the finite difference is that of NITSOL [21]. The relative step
 $\epsilon$ is the formula given by Knoll and Keyes [5]. Dual numbers are the forward mode of automatic
-differentiation [21].
+differentiation [22].
 
-**The examples.** The closed form of the Bratu problem is quoted from Ascher, Mattheij and Russell [22],
-and Boyd [23] studies the problem in two dimensions. The turbulence model is that of Spalart and
-Allmaras [24].
+**The examples.** The closed form of the Bratu problem is quoted from Ascher, Mattheij and Russell [23],
+and Boyd [24] studies the problem in two dimensions. The turbulence model is that of Spalart and
+Allmaras [25].
 
 ### List
 
@@ -744,24 +755,27 @@ Allmaras [24].
     [doi](https://doi.org/10.1137/1.9780898719857)
 15. J. Nocedal and S. J. Wright, *Numerical Optimization*, 2nd edition, Springer (2006).
     [doi](https://doi.org/10.1007/978-0-387-40065-5)
-16. D. Viswanath, *Recurrent motions within plane Couette turbulence*, J. Fluid Mech. 580 (2007)
+16. M. K. Transtrum, B. B. Machta and J. P. Sethna, *Geometry of nonlinear least squares with
+    applications to sloppy models and optimization*, Phys. Rev. E 83 (2011) 036701.
+    [doi](https://doi.org/10.1103/PhysRevE.83.036701), [arXiv](https://arxiv.org/abs/1010.1449)
+17. D. Viswanath, *Recurrent motions within plane Couette turbulence*, J. Fluid Mech. 580 (2007)
     339–358. [doi](https://doi.org/10.1017/S0022112007005459),
     [arXiv](https://arxiv.org/abs/physics/0604062)
-17. D. Viswanath, *The critical layer in pipe flow at high Reynolds number*, Phil. Trans. R. Soc. A 367
+18. D. Viswanath, *The critical layer in pipe flow at high Reynolds number*, Phil. Trans. R. Soc. A 367
     (2009) 561–576. [doi](https://doi.org/10.1098/rsta.2008.0225),
     [arXiv](https://arxiv.org/abs/0809.1498)
-18. Y. Saad, *A flexible inner-outer preconditioned GMRES algorithm*, SIAM J. Sci. Comput. 14 (1993)
+19. Y. Saad, *A flexible inner-outer preconditioned GMRES algorithm*, SIAM J. Sci. Comput. 14 (1993)
     461–469. [doi](https://doi.org/10.1137/0914028)
-19. L. Giraud, J. Langou, M. Rozložník and J. van den Eshof, *Rounding error analysis of the classical
+20. L. Giraud, J. Langou, M. Rozložník and J. van den Eshof, *Rounding error analysis of the classical
     Gram–Schmidt orthogonalization process*, Numer. Math. 101 (2005) 87–100.
     [doi](https://doi.org/10.1007/s00211-005-0615-4)
-20. M. Pernice and H. F. Walker, *NITSOL: a Newton iterative solver for nonlinear systems*, SIAM J. Sci.
+21. M. Pernice and H. F. Walker, *NITSOL: a Newton iterative solver for nonlinear systems*, SIAM J. Sci.
     Comput. 19 (1998) 302–318. [doi](https://doi.org/10.1137/S1064827596303843)
-21. A. Griewank and A. Walther, *Evaluating Derivatives*, SIAM (2008).
+22. A. Griewank and A. Walther, *Evaluating Derivatives*, SIAM (2008).
     [doi](https://doi.org/10.1137/1.9780898717761)
-22. U. M. Ascher, R. M. M. Mattheij and R. D. Russell, *Numerical Solution of Boundary Value Problems
+23. U. M. Ascher, R. M. M. Mattheij and R. D. Russell, *Numerical Solution of Boundary Value Problems
     for Ordinary Differential Equations*, SIAM (1995). [doi](https://doi.org/10.1137/1.9781611971231)
-23. J. P. Boyd, *An analytical and numerical study of the two-dimensional Bratu equation*, J. Sci.
+24. J. P. Boyd, *An analytical and numerical study of the two-dimensional Bratu equation*, J. Sci.
     Comput. 1 (1986) 183–206. [doi](https://doi.org/10.1007/BF01061392)
-24. P. R. Spalart and S. R. Allmaras, *A one-equation turbulence model for aerodynamic flows*, La
+25. P. R. Spalart and S. R. Allmaras, *A one-equation turbulence model for aerodynamic flows*, La
     Recherche Aérospatiale 1 (1994) 5–21.
