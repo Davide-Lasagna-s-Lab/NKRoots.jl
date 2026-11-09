@@ -10,8 +10,8 @@
 # step and turning it towards steepest descent. If the least-squares solution lies inside the trust
 # region it is the answer; otherwise μ is the root of ‖y(μ)‖ = Δ, which decreases monotonically in
 # μ and is found by bisection on [0, ‖p‖ max(d) / Δ], an interval where ‖y(μ)‖ ≤ ‖p‖ max(d) / μ
-# guarantees a sign change. Returns y and whether it lies on the boundary. The SVD of H is given,
-# to be reused for several radii in the same space.
+# guarantees a sign change. Returns y, whether it lies on the boundary, and μ, zero inside. The SVD
+# of H is given, to be reused for several radii in the same space.
 function _hookstep(SH::SVD, g::Vector, Δ::Real)
     U, d, V = SH
     p       = U' * g
@@ -20,7 +20,7 @@ function _hookstep(SH::SVD, g::Vector, Δ::Real)
     fun(μ) = norm(p .* d ./ (d.^2 .+ μ)) - Δ
 
     # ---- least-squares solution, if inside the trust region ----
-    fun(0.0) <= 0 && return V * (p ./ d), false
+    fun(0.0) <= 0 && return V * (p ./ d), false, 0.0
 
     # ---- boundary: root of fun by bisection ----
     lo = 0.0
@@ -31,7 +31,7 @@ function _hookstep(SH::SVD, g::Vector, Δ::Real)
     end
 
     # hi keeps ‖y‖ ≤ Δ
-    return V * (p .* d ./ (d.^2 .+ hi)), true
+    return V * (p .* d ./ (d.^2 .+ hi)), true, hi
 end
 
 # R and R⁻¹ for the length of a step, ‖Zₙ y‖ = ‖R y‖ with Zₙ the vectors zⱼ = M⁻¹ qⱼ, without the

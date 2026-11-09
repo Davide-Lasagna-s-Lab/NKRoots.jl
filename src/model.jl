@@ -31,8 +31,11 @@
 # counted products by J and applications of M⁻¹. It returns
 #   dim            the dimension of the Krylov space,
 #   krylov         the relative residual of the GMRES step after each Arnoldi step,
-#   hook(Δ)        the coordinates y of the hookstep of radius Δ, and whether it lies on the boundary,
-#                  the GMRES step for Δ = ∞,
+#   hook(Δ)        the coordinates y of the hookstep of radius Δ, whether it lies on the boundary, and
+#                  its multiplier μ, the GMRES step for Δ = ∞,
+#   damped(μ, c)   the coordinates z of the solution of (HᵀH + μ I) z = Hᵀ c in the metric of the step,
+#                  for the coordinates c of a vector on the Arnoldi basis Qₙ₊₁,
+#   jv!(out, y)    the product of J and the step of coordinates y, Qₙ₊₁ H y, with no product with J,
 #   len(y)         the length of the step of coordinates y,
 #   move!(out, y)  that step, into out,
 #   predicted(y)   the reduction of ‖r‖² that the model predicts for it, β² - ‖g - H y‖².
@@ -79,7 +82,9 @@ function _model(r, ws, product!, precondition!; precond, flexible, krylov_dim, k
 
     # ---- the hookstep (3) for any radius, from the SVD of H in the metric of the step ----
     SH = svd(Hn * Ri)
-    hook(Δ)       = (h = _hookstep(SH, g, Δ); (Ri * h[1], h[2]))
+    hook(Δ)       = (h = _hookstep(SH, g, Δ); (Ri * h[1], h[2], h[3]))
+    damped(μ, c)  = Ri * (SH.V * (SH.S ./ (SH.S.^2 .+ μ) .* (SH.U' * c)))
+    jv!(out, y)   = lincomb!(out, ws.Q, Hn * y)
     len(y)        = norm(Rm * y)
     move!(out, y) = precond === nothing ? lincomb!(out, ws.Q, y) :
                     flexible            ? lincomb!(out, ws.W, R * y) :
@@ -89,6 +94,8 @@ function _model(r, ws, product!, precondition!; precond, flexible, krylov_dim, k
     return (dim       = m,
             krylov    = krylov,
             hook      = hook,
+            damped    = damped,
+            jv!       = jv!,
             len       = len,
             move!     = move!,
             predicted = predicted)

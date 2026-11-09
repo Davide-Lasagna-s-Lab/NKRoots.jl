@@ -21,6 +21,7 @@ are at hand too. `Trace` records everything a search does.
 [The hookstep](#the-hookstep) ·
 [The radius](#the-radius) ·
 [The longest step](#the-longest-step) ·
+[Geodesic acceleration](#geodesic-acceleration) ·
 [Without a trust region](#without-a-trust-region) ·
 [The Krylov space](#the-krylov-space) ·
 [Preconditioners](#preconditioners) ·
@@ -205,13 +206,15 @@ Script: [`examples/hookstep.jl`](examples/hookstep.jl).
 ## The radius
 
 With `trust=:classical`, the default, the radius moves after each trial. It shrinks by four below
-ρ = 1/4 and doubles above ρ = 3/4 on the boundary. With `trust=:scan` the hooksteps at the radii Δ/8
-to 8Δ in steps of √2 are all tried in the same Krylov space, and the best is kept. The next radius
-is the length of that step. The best is the trial of smallest residual with `scan=:greedy`, the
-default and the greedy choice, or the longest step that lowers the residual with `scan=:longest`.
-The longest step may lower the residual less now and leave room for longer steps after it, in the
-spirit of the delayed gratification of Transtrum, Machta and Sethna [16], who take the smallest
-damping of Levenberg–Marquardt that does not move uphill.
+ρ = 1/4 and doubles above ρ = 3/4 on the boundary. With `trust=:scan` the radius is chosen
+among several trials in the same Krylov space. With `scan=:greedy`, the default, the hooksteps at the
+radii Δ/8 to 8Δ in steps of √2 are all tried, and the one of smallest residual is kept. With
+`scan=:longest` the search looks for the largest radius whose step lowers the residual. It doubles the
+radius while the trial is accepted, or halves it while the trial is rejected, and then bisects in
+log Δ until the largest accepted and the smallest rejected radius are within a factor √2. The next
+radius is the length of the step kept. The longest step may lower the residual less now and leave
+room for longer steps after it, in the spirit of the delayed gratification of Transtrum, Machta and
+Sethna [16], who take the smallest damping of Levenberg–Marquardt that does not move uphill.
 
 ```julia
 x = [2.5, 2.0]
@@ -238,31 +241,62 @@ The two equations
 
 ```julia
 function valley!(out, x)
-    s      = x[2] - x[1]^3 + 1.5x[1]
+    s      = x[2] - x[1]^2
     out[1] = s
     out[2] = s - 1e-3*x[1]
     return out
 end
 ```
 
-have one root, at the origin, at the end of a valley along the cubic x₂ = x₁³ - 3x₁/2, a thousandth
-wide. From `(-0.7, 0.8)` the rule `trust=:classical` crawls along the valley in steps shorter than a
-hundredth. A scan that keeps the longest step that lowers the residual follows it in a few steps
+have one root, at the origin, at the vertex of a valley along the parabola x₂ = x₁², a thousandth
+wide, where the valley bends the most. From `(-1, 1.1)` the rule `trust=:classical` crawls along the
+valley in steps shorter than a hundredth. A scan that keeps the longest step that lowers the residual follows it in a few steps
 longer than a tenth, as the delayed gratification of Transtrum, Machta and Sethna [16] would.
 
 ```julia
-x = [-0.7, 0.8]
+x = [-1.0, 1.1]
 nkroot!(valley!, x; jacobian=:ad, Δ=1.0, tol=1e-12, maxiter=500, trust=:scan, scan=:longest, verbose=false)
 ```
 
 ![The routes of trust=:classical and scan=:longest along a narrow bent valley](examples/figures/longest.png)
 
 The circles are the trust regions of the accepted steps. With `trust=:classical` the search takes more than
-170 Newton steps, and with `scan=:longest` fewer than ten, at less than half the residuals and a
-tenth of the products with the Jacobian. The greedy scan crawls as well, at
-ten times the residuals of `trust=:classical`.
+200 Newton steps, and with `scan=:longest` about a dozen, at less than a tenth of the residuals and of the
+products with the Jacobian. The greedy scan crawls as well, at more than ten times the residuals of
+`trust=:classical`.
 
 Script: [`examples/longest.jl`](examples/longest.jl).
+
+## Geodesic acceleration
+
+A straight step leaves a bent valley. Transtrum and Sethna [26] correct the step of Levenberg–Marquardt
+to second order, so that it bends with the valley, and the same correction applies to the hookstep.
+With `acceleration=:geodesic` every hookstep on the boundary of the trust region, the velocity v, gets
+an acceleration a, the solution of the same damped problem with the second derivative F''[v, v] in
+place of the residual, and the step is v + a/2. The second derivative comes from one more residual, by a
+finite difference along v. The acceleration is solved in the same Krylov space, with no product with the
+Jacobian. A step whose acceleration is longer than `alpha` times its velocity, 0.75 by default, is
+rejected, and the GMRES step inside the trust region is taken as it is.
+
+```julia
+x = [-1.0, 1.1]
+nkroot!(valley!, x; jacobian=:ad, Δ=1.0, tol=1e-12, maxiter=500, acceleration=:geodesic, verbose=false)
+```
+
+On the valley of the previous section the classical rule then takes about ten steps instead of more than
+200, and the scan of the longest step fewer than ten. These two equations are quadratic, so that the
+second derivative is the same everywhere and the correction is exact. An accelerated trial costs two
+residuals instead of one.
+
+![The routes of the classical rule without and with the geodesic acceleration, and the residual of four searches](examples/figures/geodesic.png)
+
+The circles are the trust regions of the accepted steps, which bound the velocity. The classical rule
+crawls along the floor of the valley, and with the acceleration it reaches the root in a few long steps.
+The residual is drawn against the Newton steps and against the residuals and the products with the
+Jacobian evaluated, both on logarithmic axes: without the acceleration the classical rule falls only
+after about 200 steps.
+
+Script: [`examples/geodesic.jl`](examples/geodesic.jl).
 
 ## Without a trust region
 
@@ -622,11 +656,12 @@ length, so the radius falls below that length at once, by factors of four, with 
 of the same point. If the radius falls to the rounding of $x$, the search stops as `:collapsed`. This happens in a valley with no root. There $J^{\mathsf T} r = 0$, so no step along
 the model lowers $\|F\|$.
 
-With `trust=:scan` the same space is used differently. The hooksteps at the radii $\Delta p$, with
-$p = 1/8$ to $8$ in steps of $\sqrt 2$, are all tried, capped by `Δmax` and by the length of the GMRES
-step. Among those with ρ > `eta` the search keeps the one of smallest residual, `scan=:greedy`,
-or the one of largest radius, `scan=:longest`, and the next radius is the length of that step. A scan
-costs up to thirteen residuals and no more products.
+With `trust=:scan` the same space is used differently. With `scan=:greedy` the hooksteps at the radii
+$\Delta p$, with $p = 1/8$ to $8$ in steps of $\sqrt 2$, are all tried, capped by `Δmax` and by the length
+of the GMRES step, and among those with ρ > `eta` the one of smallest residual is kept, at up to
+thirteen residuals. With `scan=:longest` the largest radius with ρ > `eta` is found by expansion and
+bisection in log Δ, to a factor √2, in a few residuals: every accepted radius stays below every
+rejected one. In both the next radius is the length of the step kept, and no products are added.
 
 ### How well to solve the Newton system
 
@@ -718,6 +753,8 @@ orthogonalised against many at once. The bases of MultipleShooting do this on th
 | `globalisation` | `:hookstep` | `:hookstep`, `:backtracking` or `:none`, the rule of the step | [Without a trust region](#without-a-trust-region) |
 | `trust` | `:classical` | `:classical` or `:scan`, the rule of the radius | [The radius](#the-radius) |
 | `scan` | `:greedy` | `:greedy` or `:longest`, the trial a scan keeps | [The radius](#the-radius) |
+| `acceleration` | `:none` | `:none` or `:geodesic`, the second-order correction of the hookstep | [Geodesic acceleration](#geodesic-acceleration) |
+| `alpha` | `0.75` | the longest acceleration accepted, relative to the velocity | [Geodesic acceleration](#geodesic-acceleration) |
 | `Δ` | `1e-2` | first radius of the trust region | [The radius](#the-radius) |
 | `Δmax` | `Inf` | largest radius | [The radius](#the-radius) |
 | `eta` | `1e-3` | smallest ratio for a step to be accepted | [The radius](#the-radius) |
@@ -780,6 +817,11 @@ differentiation [22].
 and Boyd [24] studies the problem in two dimensions. The turbulence model is that of Spalart and
 Allmaras [25].
 
+**The geodesic acceleration.** Transtrum and Sethna [26], their section 3, derive the second-order
+correction of the step of Levenberg–Marquardt, its finite difference along the velocity with a step of a
+tenth of it, and the test on the length of the acceleration relative to the velocity, with 0.75 for most
+of their problems. Here the correction is solved in the Krylov space of the hookstep.
+
 ### List
 
 1. W. E. Arnoldi, *The principle of minimized iterations in the solution of the matrix eigenvalue
@@ -836,3 +878,5 @@ Allmaras [25].
     Comput. 1 (1986) 183–206. [doi](https://doi.org/10.1007/BF01061392)
 25. P. R. Spalart and S. R. Allmaras, *A one-equation turbulence model for aerodynamic flows*, La
     Recherche Aérospatiale 1 (1994) 5–21.
+26. M. K. Transtrum and J. P. Sethna, *Improvements to the Levenberg-Marquardt algorithm for nonlinear
+    least-squares minimization*, preprint (2012). [arXiv](https://arxiv.org/abs/1201.5885)

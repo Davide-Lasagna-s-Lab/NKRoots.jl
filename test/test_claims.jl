@@ -379,12 +379,12 @@ end
 
 @testset "the longest step" begin
     function valley!(out, x)
-        s      = x[2] - x[1]^3 + 1.5x[1]
+        s      = x[2] - x[1]^2
         out[1] = s
         out[2] = s - 1e-3*x[1]
         return out
     end
-    run(; kw...) = search(valley!, [-0.7, 0.8]; jacobian=:ad, Δ=1.0, tol=1e-12, maxiter=500, kw...)
+    run(; kw...) = search(valley!, [-1.0, 1.1]; jacobian=:ad, Δ=1.0, tol=1e-12, maxiter=500, kw...)
     classical = run(trust=:classical)
     longest   = run(trust=:scan, scan=:longest)
     greedy    = run(trust=:scan, scan=:greedy)
@@ -397,26 +397,79 @@ end
     end
 
     @testset "trust=:classical crawls in steps shorter than a hundredth" begin
-        @test classical.out.iter > 170
+        @test classical.out.iter > 200
         @test sort(classical.trace.steplength[2:end])[end ÷ 2] < 1e-2
     end
 
-    @testset "scan=:longest takes fewer than ten steps, some longer than a tenth" begin
-        @test longest.out.iter < 10
+    @testset "scan=:longest takes about a dozen steps, some longer than a tenth" begin
+        @test longest.out.iter <= 12
         @test count(>(0.1), longest.trace.steplength[2:end]) >= 2
     end
 
-    @testset "at less than half the residuals and a tenth of the products" begin
-        @test longest.trace.residuals[end] < classical.trace.residuals[end] / 2
+    @testset "at less than a tenth of the residuals and of the products" begin
+        @test longest.trace.residuals[end] < classical.trace.residuals[end] / 10
         @test longest.trace.products[end] < classical.trace.products[end] / 10
     end
 
-    @testset "the greedy scan crawls too, at ten times the residuals" begin
-        @test greedy.out.iter > 170
-        @test greedy.trace.residuals[end] > 8 * classical.trace.residuals[end]
+    @testset "the longest step is found in a few residuals per step, fewer than the greedy scan" begin
+        @test longest.trace.residuals[end] / longest.out.iter < 8
+        @test longest.trace.residuals[end] / longest.out.iter < greedy.trace.residuals[end] / greedy.out.iter
+    end
+
+    @testset "the greedy scan crawls too, at more than ten times the residuals" begin
+        @test greedy.out.iter > 200
+        @test greedy.trace.residuals[end] > 10 * classical.trace.residuals[end]
     end
 end
 
+
+@testset "geodesic acceleration" begin
+    function valley!(out, x)
+        s      = x[2] - x[1]^2
+        out[1] = s
+        out[2] = s - 1e-3*x[1]
+        return out
+    end
+    run(; kw...) = search(valley!, [-1.0, 1.1]; jacobian=:ad, Δ=1.0, tol=1e-12, maxiter=500, kw...)
+
+    @testset "on the valley the classical rule takes about ten steps, the longest scan fewer than ten" begin
+        classical = run(acceleration=:geodesic)
+        longest   = run(acceleration=:geodesic, trust=:scan, scan=:longest)
+        @test classical.out.status === :converged
+        @test longest.out.status === :converged
+        @test classical.out.iter <= 12
+        @test longest.out.iter < 10
+        @test norm(classical.x) < 1e-8
+    end
+
+    @testset "an accelerated trial costs two residuals and no product" begin
+        plain = run(Δ=0.1, Δmax=0.1, maxiter=1)
+        geo   = run(Δ=0.1, Δmax=0.1, maxiter=1, acceleration=:geodesic)
+        @test geo.trace.step[2] == "hook"
+        @test geo.trace.rejected[2] == 0
+        @test diff(geo.trace.residuals) == [2]
+        @test diff(geo.trace.products) == diff(plain.trace.products)
+    end
+
+    @testset "the GMRES step inside the trust region is taken as it is" begin
+        x₀    = [0.0, 1e-3]                  # the GMRES step lands on the root
+        plain = search(valley!, x₀; jacobian=:ad, Δ=Inf, maxiter=1)
+        geo   = search(valley!, x₀; jacobian=:ad, Δ=Inf, maxiter=1, acceleration=:geodesic)
+        @test geo.trace.step[2] == "newton"
+        @test diff(geo.trace.residuals) == [1]
+        @test geo.x == plain.x
+    end
+
+    @testset "a longer acceleration than alpha times the velocity is rejected" begin
+        t = run(acceleration=:geodesic, alpha=0.0).trace
+        @test all(==("newton"), t.step[2:end])
+    end
+
+    @testset "the acceleration needs the hookstep" begin
+        @test_throws ArgumentError run(acceleration=:geodesic, globalisation=:backtracking)
+        @test_throws ArgumentError run(acceleration=:quadratic)
+    end
+end
 
 @testset "without a trust region" begin
     arctan!(out, x) = (out .= atan.(x); out)

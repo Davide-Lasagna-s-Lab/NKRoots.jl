@@ -2,14 +2,18 @@
 # accepted step.
 #
 #   globalisation=:hookstep, trust=:classical   the hookstep, with the classical rule of the radius
-#   globalisation=:hookstep, trust=:scan        the hookstep at several radii, in the same Krylov space
+#   globalisation=:hookstep, trust=:scan        the hookstep at several radii, in the same Krylov space:
+#                                               the one of smallest residual, scan=:greedy, or the
+#                                               longest that lowers the residual, scan=:longest
 #   globalisation=:backtracking                 the GMRES step, halved until the residual falls enough
 #   globalisation=:none                         the GMRES step, classical Newton
 #
-# Each rule tries steps of the model by `trial!(y)`, which writes the trial point and its residual
-# into ws.xn and ws.rn and returns the norm of the residual and the ratio ρ of the actual to the
-# predicted reduction of ‖r‖², until it accepts one with ρ > eta (classical Newton accepts any step
-# of finite residual). It returns the accepted trial: its coordinates `y`, its `kind`, "newton" for
+# Each rule tries steps of the model by `trial!(y, μ)`, with y the coordinates of the velocity and μ
+# its multiplier, which writes the trial point and its residual into ws.xn and ws.rn and returns
+# the norm of the residual, the ratio ρ of the actual to the predicted reduction of ‖r‖² and the
+# coordinates of the step, the velocity or with the geodesic acceleration more, until it accepts one
+# with ρ > eta (classical Newton accepts any step of finite residual). The radii bound the velocity.
+# It returns the accepted trial: the coordinates `y` of its step, its `kind`, "newton" for
 # the GMRES step, "hook" for a hookstep on the boundary of the trust region and "line" for a GMRES
 # step shortened by backtracking, its ratio `ρ`, the radius `used` with which it was computed (its
 # length without a trust region), the fraction `λ` of the GMRES step that it is (NaN for a
@@ -17,7 +21,7 @@
 # `res`, and the radius and ratio of every other trial; or `accepted = false` when the step falls
 # below `Δmin`, the rounding of x, or the residual of classical Newton is not finite.
 
-# the factors of the radius tried by trust=:scan, 1/8 to 8 in steps of √2
+# the factors of the radius tried by scan=:greedy, 1/8 to 8 in steps of √2
 const SCAN = 2.0 .^ (-3:0.5:3)
 
 # the accepted step of the model, by the rule of globalisation and, for the hookstep, of trust and scan
@@ -28,8 +32,10 @@ function _step(trial!, model, ws, Δ; globalisation, trust, scan, Δmax, eta, Δ
         return _backtracking(trial!, model, ws, Δ; Δmax=Δmax, eta=eta, Δmin=Δmin)
     trust === :classical &&
         return _classical(trial!, model, ws, Δ; Δmax=Δmax, eta=eta, Δmin=Δmin)
+    scan === :greedy &&
+        return _greedy(trial!, model, ws, Δ; Δmax=Δmax, eta=eta, Δmin=Δmin)
 
-    return _scan(trial!, model, ws, Δ; Δmax=Δmax, eta=eta, Δmin=Δmin, pick=scan)
+    return _longest(trial!, model, ws, Δ; Δmax=Δmax, eta=eta, Δmin=Δmin)
 end
 
 
@@ -43,11 +49,11 @@ end
 # length at once, with no new residual of the same point. A radius that stays infinite after a
 # rejection has no shorter step to give, and the region has collapsed
 function _classical(trial!, model, ws, Δ; Δmax, eta, Δmin)
-    trials = Tuple{Float64, Float64}[]
-    used   = Δ
-    y, at  = model.hook(Δ)
+    trials    = Tuple{Float64, Float64}[]
+    used      = Δ
+    y, at, μ  = model.hook(Δ)
     while true
-        res, ρ = trial!(y)
+        res, ρ, s = trial!(y, μ)
 
         # ---- the radius: a ratio that is not a number counts as a poor step, and a rejected trial
         #      shrinks the radius whatever eta is, or the same trial would come back ----
@@ -69,7 +75,7 @@ function _classical(trial!, model, ws, Δ; Δmax, eta, Δmin)
         end
         (accepted || !(Δmin <= Δ < Inf)) &&
             return (accepted = accepted,
-                    y        = y,
+                    y        = s,
                     kind     = at ? "hook" : "newton",
                     ρ        = ρ,
                     used     = used,
@@ -79,40 +85,37 @@ function _classical(trial!, model, ws, Δ; Δmax, eta, Δmin)
                     r        = ws.rn,
                     res      = res,
                     trials   = trials)
-        y, at = model.hook(Δ)
-        used  = Δ
+        y, at, μ = model.hook(Δ)
+        used     = Δ
     end
 end
 
-# trust=:scan: the hooksteps at the radii Δ p for the factors p of SCAN, capped by Δmax and by the
-# length of the GMRES step, which every larger radius gives. Among the trials with ρ > eta, a step
-# that lowers ‖F‖, the scan accepts the one of smallest residual, pick=:greedy, or the one of
-# largest radius, the longest step, pick=:longest. The longest step may lower ‖F‖ less now and keep
-# longer steps open after it, as in the delayed gratification of Transtrum, Machta and Sethna (2011,
-# section VIII C) for the damping of Levenberg–Marquardt. The next radius is the length of the
-# accepted step. If none has ρ > eta, the scan starts again below the smallest radius tried
-function _scan(trial!, model, ws, Δ; Δmax, eta, Δmin, pick)
+# trust=:scan, scan=:greedy: the hooksteps at the radii Δ p for the factors p of SCAN, capped by Δmax
+# and by the length of the GMRES step, which every larger radius gives. Among the trials with
+# ρ > eta, a step that lowers ‖F‖, the scan accepts the one of smallest residual, and the next radius
+# is the length of its step. If none has ρ > eta, the scan starts again below the smallest radius
+# tried
+function _greedy(trial!, model, ws, Δ; Δmax, eta, Δmin)
     yN, _ = model.hook(Inf)
     ℓN    = isfinite(model.len(yN)) ? model.len(yN) : Inf
     tried = Tuple{Float64, Float64}[] # radius and ratio of every trial
     while true
         best  = 0          # the best trial of this scan
         resb  = Inf        # its residual norm
-        usedb = 0.0        # its radius
-        yb    = yN         # its coordinates
+        yb    = yN         # its velocity
+        sb    = yN         # its step
         atb   = false      # and whether it lies on the boundary
         for ρr in unique(min.(Δ .* SCAN, Δmax, ℓN))
-            yr, at = model.hook(ρr)
-            res, q = trial!(yr)
+            yr, at, μr = model.hook(ρr)
+            res, q, s  = trial!(yr, μr)
             push!(tried, (ρr, q))
 
-            # a step that lowers ‖F‖, better than the best so far by the rule of pick
-            better = pick === :greedy ? res < resb : ρr > usedb
-            if q > eta && better
+            # a step that lowers ‖F‖, of smaller residual than the best so far
+            if q > eta && res < resb
                 best    = length(tried)
                 resb    = res
-                usedb   = ρr
                 yb      = yr
+                sb      = s
                 atb     = at
                 ws.xb  .= ws.xn
                 ws.rb  .= ws.rn
@@ -123,7 +126,7 @@ function _scan(trial!, model, ws, Δ; Δmax, eta, Δmin, pick)
         #      collapsed ----
         best > 0 &&
             return (accepted = true,
-                    y        = yb,
+                    y        = sb,
                     kind     = atb ? "hook" : "newton",
                     ρ        = tried[best][2],
                     used     = tried[best][1],
@@ -150,6 +153,88 @@ function _scan(trial!, model, ws, Δ; Δmax, eta, Δmin, pick)
 end
 
 
+# trust=:scan, scan=:longest: the largest radius whose hookstep lowers ‖F‖, ρ > eta, found by
+# expansion and bisection in log Δ. From Δ, the length of the last accepted step, the radius doubles
+# while the trial is accepted, up to Δmax and to the length of the GMRES step, which every larger
+# radius gives, or it halves while the trial is rejected, until one is accepted or the radius falls
+# below Δmin. The bracket between the largest accepted radius and the smallest rejected one is then
+# halved in log Δ until its ends are within a factor √2. Every accepted radius stays below every
+# rejected one, and the largest accepted trial is kept; the next radius is the length of its step.
+# It takes a few residuals where a scan of the radii of SCAN takes up to thirteen. The longest step
+# may lower ‖F‖ less now and keep longer steps open after it, as in the delayed gratification of
+# Transtrum, Machta and Sethna (2011, section VIII C) for the damping of Levenberg–Marquardt
+function _longest(trial!, model, ws, Δ; Δmax, eta, Δmin)
+    yN, _ = model.hook(Inf)
+    cap   = min(Δmax, isfinite(model.len(yN)) ? model.len(yN) : Inf)
+    tried = Tuple{Float64, Float64}[] # radius and ratio of every trial
+    best  = 0                         # the accepted trial of largest radius
+    yb    = yN                        # its velocity
+    sb    = yN                        # its step
+    atb   = false                     # whether it lies on the boundary
+    resb  = Inf                       # and its residual norm
+    lo    = 0.0                       # the largest accepted radius
+    hi    = Inf                       # the smallest rejected radius
+    ρr    = min(Δ, cap)               # the radius of the next trial
+    isfinite(ρr) || (ρr = model.len(yN))
+
+    while true
+        # ---- one trial: an accepted one is the longest so far, since it lies below hi ----
+        y, at, μ  = model.hook(ρr)
+        res, q, s = trial!(y, μ)
+        push!(tried, (ρr, q))
+        if q > eta
+            best   = length(tried)
+            yb     = y
+            sb     = s
+            atb    = at
+            resb   = res
+            lo     = ρr
+            ws.xb .= ws.xn
+            ws.rb .= ws.rn
+        else
+            hi = ρr
+        end
+
+        # ---- the next radius: double while none is rejected, halve while none is accepted, then
+        #      bisect in log Δ until the bracket is within a factor √2 ----
+        if hi == Inf
+            lo >= cap &&
+                break
+            ρr = min(2lo, cap)
+        elseif best == 0
+            ρr = hi / 2
+            ρr >= Δmin ||
+                return (accepted = false,
+                        y        = yb,
+                        kind     = "hook",
+                        ρ        = NaN,
+                        used     = ρr,
+                        λ        = NaN,
+                        Δ        = ρr,
+                        x        = ws.xb,
+                        r        = ws.rb,
+                        res      = resb,
+                        trials   = tried)
+        else
+            hi > sqrt(2) * lo ||
+                break
+            ρr = sqrt(lo * hi)
+        end
+    end
+
+    return (accepted = true,
+            y        = sb,
+            kind     = atb ? "hook" : "newton",
+            ρ        = tried[best][2],
+            used     = tried[best][1],
+            λ        = NaN,
+            Δ        = min(model.len(yb), Δmax),
+            x        = ws.xb,
+            r        = ws.rb,
+            res      = resb,
+            trials   = tried[[1:best - 1; best + 1:end]])
+end
+
 # ---------------------------------------------------------------------------- #
 # the GMRES step                                                               #
 # ---------------------------------------------------------------------------- #
@@ -163,7 +248,7 @@ function _backtracking(trial!, model, ws, Δ; Δmax, eta, Δmin)
     λ      = min(1.0, Δmax / ℓ)
     trials = Tuple{Float64, Float64}[]
     while true
-        res, ρ   = trial!(λ .* yN)
+        res, ρ, _ = trial!(λ .* yN, 0.0)
         accepted = ρ > eta
         accepted || push!(trials, (λ * ℓ, ρ))
 
@@ -188,7 +273,7 @@ end
 # residual that is not finite ends the search. The radius Δ is kept as it is
 function _full(trial!, model, ws, Δ)
     yN, _  = model.hook(Inf)
-    res, ρ = trial!(yN)
+    res, ρ, _ = trial!(yN, 0.0)
 
     return (accepted = isfinite(res),
             y        = yN,

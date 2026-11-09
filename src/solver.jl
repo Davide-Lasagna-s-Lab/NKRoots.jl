@@ -15,6 +15,18 @@
 # classical Newton takes it as it is. A trial step is judged by the ratio ρ of the actual to the
 # predicted reduction of ‖r‖².
 #
+# Geodesic acceleration (Transtrum and Sethna 2012, section 3). To second order the residual along a
+# step s is F(x + s) ≈ r + J s + F''[s, s]/2. With the hookstep v, the velocity, and its multiplier
+# μ, the acceleration a solves the same damped problem with F''[v, v] in place of r,
+#
+#     (JᵀJ + μ I) a = -Jᵀ F''[v, v],                                                 (4)
+#
+# and the step is v + a/2. F''[v, v] comes from one more residual, by the forward difference
+# (2/h)((F(x + h v) - r)/h - J v) with h = 0.1, and J v = Qₙ₊₁ H y from the Arnoldi relation; (4) is
+# solved in the Krylov space, on the coordinates of F''[v, v] on Qₙ₊₁. The step is accepted only if
+# ‖a‖ ≤ α ‖v‖ and its ratio, against the reduction predicted for v, exceeds eta. The trust region
+# bounds the velocity, and the GMRES step inside it is not accelerated.
+#
 # The files: krylov.jl, the Arnoldi iteration; preconditioner.jl, the right preconditioner; model.jl,
 # the linear model of (1) in the Krylov space; hookstep.jl, the constrained step; globalisation.jl,
 # the rules of the step; output.jl, the table; trace.jl, the record of a search; jacobian.jl, the
@@ -24,8 +36,9 @@ export nkroot!
 
 """
     nkroot!(F!, J, x; precond=nothing, flexible=false, krylov_dim=50, krylov_tol=1e-3,
-            globalisation=:hookstep, trust=:classical, scan=:greedy, Δ=1e-2, Δmax=Inf, eta=1e-3,
-            maxiter=20, tol=1e-10, verbose=true, io=stdout, callback=info -> false)
+            globalisation=:hookstep, trust=:classical, scan=:greedy, acceleration=:none, alpha=0.75,
+            Δ=1e-2, Δmax=Inf, eta=1e-3, maxiter=20, tol=1e-10, verbose=true, io=stdout,
+            callback=info -> false)
             -> (; status, iter, res)
 
 Solve `F(x) = 0` by Newton–Krylov from the guess `x`, overwritten with the root.
@@ -46,9 +59,13 @@ Solve `F(x) = 0` by Newton–Krylov from the guess `x`, overwritten with the roo
 - `globalisation=:hookstep` restricts the step to a trust region; `:backtracking` halves the GMRES
   step until its ratio exceeds `eta`; `:none` takes the GMRES step as it is, classical Newton.
 - `trust=:classical` moves the radius of the hookstep after each trial by its ratio, the classical
-  rule; `trust=:scan` tries several radii in the same Krylov space and keeps, among the trials with
-  a ratio above `eta`, the one of smallest residual, `scan=:greedy`, or the longest step,
-  `scan=:longest`, which may lower the residual less now and leave room for longer steps after it.
+  rule; `trust=:scan` chooses the radius among several trials in the same Krylov space: the one of
+  smallest residual among thirteen radii, `scan=:greedy`, or the largest radius whose step has a
+  ratio above `eta`, found to a factor √2 by expansion and bisection, `scan=:longest`. The longest
+  step may lower the residual less now and leave room for longer steps after it.
+- `acceleration=:geodesic` adds to every hookstep v the geodesic acceleration of Transtrum and
+  Sethna (2012), a/2 with a the damped solution of J a = -F''[v, v], at one more residual per
+  trial and no product with `J`; a trial is rejected if ‖a‖ > `alpha` ‖v‖. It needs the hookstep.
 - `Δ`, `Δmax`: initial and largest trust-region radius; `Δmax` also caps the step of backtracking.
   `eta`: smallest ratio of the actual to the predicted reduction of `‖r‖²` for a step to be
   accepted, by the hookstep and by backtracking.
@@ -71,6 +88,8 @@ function nkroot!(F!, J, x; precond=nothing,
                            globalisation::Symbol=:hookstep,
                            trust::Symbol=:classical,
                            scan::Symbol=:greedy,
+                           acceleration::Symbol=:none,
+                           alpha::Real=0.75,
                            Δ::Real=1e-2,
                            Δmax::Real=Inf,
                            eta::Real=1e-3,
@@ -87,6 +106,10 @@ function nkroot!(F!, J, x; precond=nothing,
         throw(ArgumentError("trust must be :classical or :scan"))
     scan in (:greedy, :longest) ||
         throw(ArgumentError("scan must be :greedy or :longest"))
+    acceleration in (:none, :geodesic) ||
+        throw(ArgumentError("acceleration must be :none or :geodesic"))
+    acceleration === :none || globalisation === :hookstep ||
+        throw(ArgumentError("acceleration=:geodesic needs globalisation=:hookstep"))
 
     # ---- the first radius obeys the largest one, as all the others do ----
     Δ = min(Δ, Δmax)
@@ -126,7 +149,8 @@ function nkroot!(F!, J, x; precond=nothing,
         precond === nothing || flexible || (counts[3] += _gram_applications(precond, model.dim))
 
         # ---- the step, by the rule of the globalisation ----
-        trial! = y -> _trial!(residual!, model, ws, x, res, y)
+        trial! = (y, μ) -> _trial!(residual!, model, ws, x, r, res, y, μ; accelerate=acceleration === :geodesic,
+                                                                        alpha=alpha)
         t      = _step(trial!, model, ws, Δ; globalisation=globalisation,
                                              trust=trust,
                                              scan=scan,
@@ -186,16 +210,45 @@ _workspace(x) = (r  = similar(x), # residual at x
                  xn = similar(x), # trial point x + δx
                  xb = similar(x), # best trial point of a scan
                  rb = similar(x), # and its residual
+                 jv = similar(x), # J v, for the geodesic acceleration
+                 vv = similar(x), # F''[v, v]
                  Q  = _basis(x),  # the Arnoldi vectors
                  W  = _basis(x))  # flexible: the vectors zⱼ = M⁻¹ qⱼ orthonormalised, Zₙ = Wₙ R
 
-# a trial step of Krylov coordinates y from x, where the residual norm is res: its point into
-# ws.xn, its residual into ws.rn, the norm of that residual and the ratio of the actual to the
-# predicted reduction of ‖r‖²
-function _trial!(residual!, model, ws, x, res, y)
-    model.move!(ws.δx, y)
+# the step of the forward difference of the geodesic acceleration, a tenth of the velocity
+const _H = 0.1
+
+# a trial from x, where the residual is r of norm res, with the velocity of Krylov coordinates y and
+# multiplier μ: the step is v, or with accelerate=true v + a/2 by (4) for a hookstep on the boundary
+# of the trust region, μ > 0, unless ‖a‖ > alpha ‖v‖, which rejects it with no residual of its
+# point. The GMRES step inside the region, μ = 0, is taken as it is: near the root it converges
+# quadratically, and the difference of (4) along a short v drowns in the noise of F. Its point into
+# ws.xn, its residual into ws.rn, the norm of that residual, the ratio of the actual reduction of
+# ‖r‖² to the one predicted for v, and the coordinates of the step
+function _trial!(residual!, model, ws, x, r, res, y, μ; accelerate::Bool, alpha::Real)
+    s = y
+
+    if accelerate && μ > 0
+        # ---- F''[v, v] by one more residual, with J v from the Arnoldi relation ----
+        model.move!(ws.δx, y)
+        ws.xn .= x .+ _H .* ws.δx
+        residual!(ws.rn, ws.xn)
+        model.jv!(ws.jv, y)
+        ws.vv .= (2/_H) .* ((ws.rn .- r) ./ _H .- ws.jv)
+
+        # ---- the acceleration (4) in the Krylov space, on the coordinates of F''[v, v] ----
+        c = zeros(model.dim + 1)
+        _orthogonalise!(copy(ws.vv), ws.Q, c)
+        a = model.damped(μ, .-c)
+        model.len(a) <= alpha * model.len(y) ||
+            return Inf, -Inf, y
+        s = y .+ a ./ 2
+    end
+
+    # ---- the residual at the step ----
+    model.move!(ws.δx, s)
     ws.xn .= x .+ ws.δx
     resn   = norm(residual!(ws.rn, ws.xn))
 
-    return resn, (res^2 - resn^2) / model.predicted(y)
+    return resn, (res^2 - resn^2) / model.predicted(y), s
 end
