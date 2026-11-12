@@ -14,6 +14,9 @@
 #
 # with Π the projector that discards the modes beyond the two-thirds rule, removes the mean and takes
 # the real part of every Fourier coefficient, which is the symmetric part of the field.
+#
+# A grid holds the work arrays of the residual and of the preconditioner, so that they allocate
+# nothing. One search at a time may use a grid, and searches that run in parallel take one each.
 using FFTW
 using LinearAlgebra
 using Random
@@ -32,6 +35,13 @@ struct Kolmogorov{P, Q}
        wave::Matrix{Float64} # sin(4y) on the grid, the force along x
        plan::P               # real transform of a field on the grid
       iplan::Q               # and its inverse
+          â::Matrix{Float64}    # work: the coefficients of Πω
+          ĉ::Matrix{ComplexF64} # work: coefficients on their way to or from the grid
+          u::Matrix{Float64}    # work: the velocity along x, then the advection and the forcing
+          v::Matrix{Float64}    # work: the velocity along y
+         ωx::Matrix{Float64}    # work: the derivatives of the vorticity
+         ωy::Matrix{Float64}
+          f::Matrix{Float64}    # work: a field from its coefficients
 
     function Kolmogorov(N::Int=128; Re::Real=40.0)
         # ---- the wavenumbers: 0 to N/2 along x, where the real transform keeps half, all along y ----
@@ -61,7 +71,14 @@ struct Kolmogorov{P, Q}
                                                 forcing,
                                                 wave,
                                                 plan,
-                                                iplan)
+                                                iplan,
+                                                zeros(N÷2 + 1, N),
+                                                zeros(ComplexF64, N÷2 + 1, N),
+                                                zeros(N, N),
+                                                zeros(N, N),
+                                                zeros(N, N),
+                                                zeros(N, N),
+                                                zeros(N, N))
     end
 end
 
@@ -81,19 +98,31 @@ function velocity(K::Kolmogorov, a)
 end
 
 
-# ---- the residual G(ω), written into out ----
+# ---- the residual G(ω), written into out, in the work arrays of the grid ----
 function residual!(out, ω, K::Kolmogorov)
-    # ---- Πω, its velocity and its gradient ----
-    a    = project(K, ω)
-    u, v = velocity(K, a)
-    ωx   = K.iplan * (im .* K.kx .* a)
-    ωy   = K.iplan * (im .* K.ky .* a)
+    # ---- the coefficients a of Πω ----
+    mul!(K.ĉ, K.plan, ω)
+    K.â .= K.keep .* real.(K.ĉ)
 
-    # ---- the advection and the forcing, on the grid, and their coefficients in the range of Π ----
-    n = project(K, u .* ωx .+ v .* ωy .+ K.forcing)
+    # ---- the velocity from the streamfunction ψ = a/|k|², and the gradient of the vorticity ----
+    K.ĉ .= im .* K.ky .* (K.â ./ K.k²)
+    mul!(K.u, K.iplan, K.ĉ)
+    K.ĉ .= -im .* K.kx .* (K.â ./ K.k²)
+    mul!(K.v, K.iplan, K.ĉ)
+    K.ĉ .= im .* K.kx .* K.â
+    mul!(K.ωx, K.iplan, K.ĉ)
+    K.ĉ .= im .* K.ky .* K.â
+    mul!(K.ωy, K.iplan, K.ĉ)
 
-    # ---- Π N(Πω) - Πω, with the viscous term, and ω: the identity outside the range of Π ----
-    out .= ω .+ field(K, n .+ (K.k² ./ K.Re .- 1) .* a)
+    # ---- the advection and the forcing, on the grid ----
+    K.u .= K.u .* K.ωx .+ K.v .* K.ωy .+ K.forcing
+
+    # ---- their coefficients in the range of Π, with the viscous term and less Πω, back on the grid,
+    #      and ω added: the identity outside the range of Π ----
+    mul!(K.ĉ, K.plan, K.u)
+    K.ĉ .= K.keep .* real.(K.ĉ) .+ (K.k² ./ K.Re .- 1) .* K.â
+    mul!(K.f, K.iplan, K.ĉ)
+    out .= ω .+ K.f
 
     return out
 end
@@ -104,11 +133,14 @@ struct Stokes{T}
     K::T # the grid
 end
 
-# M⁻¹ v: the coefficients in the range of Π are multiplied by Re/|k|²
+# M⁻¹ v: the coefficients in the range of Π are multiplied by Re/|k|², in the work arrays of the grid
 function LinearAlgebra.ldiv!(out, M::Stokes, v)
-    K    = M.K
-    a    = project(K, v)
-    out .= v .+ field(K, (K.Re ./ K.k² .- 1) .* a)
+    K = M.K
+
+    mul!(K.ĉ, K.plan, v)
+    K.ĉ .= (K.Re ./ K.k² .- 1) .* (K.keep .* real.(K.ĉ))
+    mul!(K.f, K.iplan, K.ĉ)
+    out .= v .+ K.f
 
     return out
 end
