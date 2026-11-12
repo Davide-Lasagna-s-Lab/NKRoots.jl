@@ -278,5 +278,9 @@ function _trial!(residual!, model, ws, x, r, res, y, μ; accelerate::Bool, alpha
     ws.xn .= x .+ ws.δx
     resn   = norm(residual!(ws.rn, ws.xn))
 
-    return resn, (res^2 - resn^2) / model.predicted(y), s
+    # ---- the ratio, with the size of the predicted reduction: the model predicts a reduction for every
+    #      step in exact arithmetic, but with a Jacobian that is singular to rounding the computed one can
+    #      be negative, and the ratio of two negative numbers would accept a step that raises ‖F‖. With
+    #      the size, the ratio has the sign of the actual reduction ----
+    return resn, (res^2 - resn^2) / abs(model.predicted(y)), s
 end

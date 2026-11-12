@@ -106,7 +106,9 @@ function _greedy(trial!, model, ws, Δ; Δmax, eta, Δmin)
         sb    = yN         # its step
         atb   = false      # and whether it lies on the boundary
         for ρr in unique(min.(Δ .* SCAN, Δmax, ℓN))
-            yr, at, μr = model.hook(ρr)
+            # at the cap ℓN the step is the GMRES step itself: the hookstep of that radius would be it
+            # or a step on the boundary beside it as rounding decides, and the acceleration with it
+            yr, at, μr = model.hook(ρr < ℓN ? ρr : Inf)
             res, q, s  = trial!(yr, μr)
             push!(tried, (ρr, q))
 
@@ -163,7 +165,8 @@ end
 # Transtrum, Machta and Sethna (2011, section VIII C) for the damping of Levenberg–Marquardt
 function _longest(trial!, model, ws, Δ; Δmax, eta, Δmin)
     yN, _ = model.hook(Inf)
-    cap   = min(Δmax, isfinite(model.len(yN)) ? model.len(yN) : Inf)
+    ℓN    = isfinite(model.len(yN)) ? model.len(yN) : Inf
+    cap   = min(Δmax, ℓN)
     tried = Tuple{Float64, Float64}[] # radius and ratio of every trial
     best  = 0                         # the accepted trial of largest radius
     yb    = yN                        # its velocity
@@ -177,7 +180,8 @@ function _longest(trial!, model, ws, Δ; Δmax, eta, Δmin)
 
     while true
         # ---- one trial: an accepted one is the longest so far, since it lies below hi ----
-        y, at, μ  = model.hook(ρr)
+        # at the length ℓN of the GMRES step the step is the GMRES step itself, as in the greedy scan
+        y, at, μ  = model.hook(ρr < ℓN ? ρr : Inf)
         res, q, s = trial!(y, μ)
         push!(tried, (ρr, q))
         if q > eta
@@ -248,8 +252,9 @@ function _backtracking(trial!, model, ws, Δ; Δmax, eta, Δmin)
         accepted = ρ > eta
         accepted || push!(trials, (λ * ℓ, ρ))
 
-        # ---- accepted, or half the step unless it has collapsed ----
-        (accepted || λ * ℓ / 2 < Δmin) &&
+        # ---- accepted, or half the step unless it has collapsed; a length that is not a number, as the
+        #      GMRES step of a Jacobian that vanishes has, counts as a collapse, or the loop would not end ----
+        (accepted || !(λ * ℓ / 2 >= Δmin)) &&
             return (accepted = accepted,
                     y        = λ .* yN,
                     kind     = λ == 1 ? "newton" : "line",
