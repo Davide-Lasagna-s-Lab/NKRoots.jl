@@ -724,6 +724,10 @@ The examples of this section suggest the following, and no more than that.
 - The longest step and the geodesic acceleration are for narrow curved valleys, where the classical
   rule takes many short steps.
 
+The searches for [equilibria of Kolmogorov flow](#equilibria-of-kolmogorov-flow) give a different
+ranking on another problem. There the longest scan converges from five guesses of eight and the
+other rules from at most two.
+
 ## Preconditioning
 
 GMRES needs many Arnoldi steps when the Jacobian has a wide spectrum, and a preconditioner
@@ -1249,22 +1253,51 @@ from the seed 4, converges in 19 iterations.
 there is $8\times10^{-12}$ in the norm of the grid. Multiplying $N(\omega) = 0$ by the
 streamfunction and averaging over the square gives the energy balance of an equilibrium, $D = I$,
 with the dissipation $D = \langle\omega^2\rangle/Re$ and the input
-$I = \langle u\sin(4y)\rangle$. The two equilibria of the figure satisfy it to $10^{-13}$.
+$I = \langle u\sin(4y)\rangle$. The nine equilibria found by the searches below satisfy it to
+$1.4\times10^{-13}$.
 
-**The globalisations.** The script runs the guesses of the seeds 1 to 8 with the settings of the
-block above and each globalisation, with at most 80 iterations.
+**The globalisations.** The script runs the guesses of the seeds 1 to 8 with backtracking and with
+four rules of the hookstep, the classical rule of the radius, the greedy scan, the longest scan and
+the classical rule with the geodesic acceleration. The other settings are those of the block above,
+the same for every search, with at most 80 iterations. The cost is counted in calls of $G$. A
+product with the Jacobian by finite differences is one call of $G$, so this counts the residuals of
+the trials and the products of the Krylov spaces alike, and it is fair to the scans, which spend
+more residuals per iteration.
 
-| | converge, of 8 | the others |
-|---|---:|---|
-| `globalisation=:none` | 0 | all reach 80 iterations, with the residual between $2\times10^4$ and $8\times10^5$ |
-| `globalisation=:backtracking` | 0 | five collapse and three reach 80 iterations, with the residual between 150 and 380 |
-| `globalisation=:hookstep` | 2 | six reach 80 iterations, with the residual between 8 and 53 |
+| | converge, of 8 | seeds | calls of $G$ of those that converge | the others | calls of $G$, all eight searches |
+|---|---:|---|---|---|---:|
+| `globalisation=:backtracking` | 0 | | | five collapse and three reach 80 iterations, with $\lVert G\rVert$ from 150 to 374 | 73 097 |
+| `trust=:classical` | 2 | 1, 4 | 8551, 1415 | reach 80 iterations, with $\lVert G\rVert$ from 7.8 to 53 | 61 982 |
+| `trust=:scan, scan=:greedy` | 1 | 4 | 1383 | reach 80 iterations, with $\lVert G\rVert$ from 4.7 to 49 | 69 133 |
+| `trust=:scan, scan=:longest` | 5 | 2, 4, 5, 7, 8 | 2039, 4309, 1720, 1308, 3315 | reach 80 iterations, with $\lVert G\rVert$ from 3.4 to 58 | 37 914 |
+| `trust=:classical, acceleration=:geodesic` | 2 | 1, 4 | 1326, 1599 | reach 80 iterations, with $\lVert G\rVert$ from 13 to 52 | 53 676 |
 
-The residual of the guesses is a few hundred, 361 for the seed 1. The hookstep converges from the
-seeds 1 and 4, to two different equilibria, in 77 and 19 iterations. From the other six it lowers
-the residual to between 8 and 53, and then the curves of the figure are nearly flat. A search that
-stalls in this way may sit near a local minimum of $\lVert G\rVert$, as the fourth search of
-[the first example](#a-first-search) does. Eight guesses are too few for a statistic.
+The residual of the guesses is a few hundred, 361 for the seed 1. Per iteration the searches spend
+about one residual with the classical rule, two to three with the longest scan and with the
+acceleration, thirteen with the greedy scan and 34 with backtracking. The products of the Krylov
+spaces still make most of the cost, 78% of the calls with backtracking and 89% or more with the
+hookstep.
+
+- **The longest scan** converges from five guesses of eight, and its eight searches together cost
+  about 60% of those of the classical rule. It converges from the seeds 2, 5, 7 and 8, where the
+  classical rule stalls, and stalls from the seed 1, where the classical rule converges. A stall
+  therefore depends on the rule as well as on the guess. These runs do not show why the longest
+  step does better here.
+- **The greedy scan** converges from one guess, fewer than the classical rule, and stalls from the
+  seed 1, from which the classical rule converges. Keeping the trial of smallest residual at each
+  iteration does not help on these guesses.
+- **The geodesic acceleration** converges from the same two guesses as the classical rule. From the
+  seed 1 it takes 18 iterations in place of 77, and reaches a different equilibrium. It does not
+  rescue any of the six guesses from which the classical rule stalls.
+- **Backtracking** converges from none. It spends 34 residuals per iteration, which is 33 halvings of
+  the Newton step on average, so its accepted steps are on average fractions of order
+  $2^{-33} \approx 10^{-10}$ of it. Five of its searches end as `:collapsed`, with the residual
+  between 150 and 374.
+
+The converged searches reach nine different equilibria, told apart by their dissipation and energy.
+Only the seed 4 with the classical rule and with the acceleration leads twice to the same one. No
+rule converges from the seeds 3 and 6. Eight guesses and one cap on the iterations are too few for a
+statistic, and other settings would give other counts.
 
 **GMRES and the preconditioner.** The script solves two Newton systems of the search from the seed
 1 to a relative residual of $10^{-8}$, with and without the preconditioner, in a Krylov space of up
@@ -1277,8 +1310,10 @@ converges after 8466. This agrees with the statement of the paper.
 
 ![Searches for equilibria of Kolmogorov flow](examples/kolmogorov/kolmogorov.png)
 
-Top left, the residual of the 24 searches. Top right, the relative residual of GMRES on the two
-Newton systems. Bottom, the vorticity of the two equilibria, with their dissipation $D$ and their
+Top, one panel for each rule, with the residual of its eight searches against their cost in
+thousands of calls of $G$, dark for the searches that converge and light for the others. Bottom
+left, the relative residual of GMRES on the two Newton systems. Bottom middle and right, the
+vorticity of the two equilibria found by the classical rule, with their dissipation $D$ and their
 kinetic energy $E = \langle|\mathbf u|^2\rangle/2$.
 
 The example tests the solver on a problem from the literature. It is not a survey of the equilibria
@@ -1286,7 +1321,7 @@ of the flow.
 
 Script: [`examples/kolmogorov/kolmogorov.jl`](examples/kolmogorov/kolmogorov.jl), with the
 discretisation in [`examples/kolmogorov/problem.jl`](examples/kolmogorov/problem.jl). It takes about
-seventeen minutes, most of them in the searches that do not converge.
+sixteen minutes, most of them in the searches that do not converge.
 
 ## How it works
 

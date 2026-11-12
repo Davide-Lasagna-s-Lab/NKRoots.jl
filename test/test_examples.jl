@@ -339,11 +339,12 @@ end
         @test ldiv!(similar(c), M, c) ≈ (40/25) .* c
         @test ldiv!(similar(c), M, sin.(xs)) ≈ sin.(xs)
 
-        # the first Newton system of a guess, to a relative residual of 1e-6
+        # the first Newton system of a guess, to a relative residual of 1e-6: the Krylov space is built
+        # before the globalisation, so one iteration of the hookstep gives it
         function dimension(precond)
             t = Trace()
-            nkroot!(G!, copy(ω); precond=precond, globalisation=:none, krylov_dim=400, krylov_tol=1e-6, maxiter=1,
-                    verbose=false, callback=t)
+            nkroot!(G!, copy(ω); precond=precond, krylov_dim=400, krylov_tol=1e-6, maxiter=1, verbose=false,
+                    callback=t)
             return length(t.krylov[2])
         end
         @test dimension(M) < dimension(nothing) / 2
@@ -353,13 +354,15 @@ end
         M  = KP.Stokes(K)
         ωL = KP.laminar(K)
 
-        # ---- classical Newton from the laminar state with a small symmetric perturbation ----
+        # ---- the hookstep from the laminar state with a small symmetric perturbation, with a radius
+        #      larger than the perturbation: every step is the whole Newton step ----
         t   = Trace()
         ω   = ωL .+ 0.1 .* (cos.(xs .+ ys) .+ cos.(2xs .- 3ys))
-        out = nkroot!(G!, ω; precond=M, globalisation=:none, krylov_dim=250, krylov_tol=1e-3, tol=1e-9, maxiter=10,
-                      verbose=false, callback=t)
+        out = nkroot!(G!, ω; precond=M, Δ=10.0, krylov_dim=250, krylov_tol=1e-3, tol=1e-9, maxiter=10, verbose=false,
+                      callback=t)
         @test out.status === :converged
         @test norm(ω .- ωL) < 1e-9 * norm(ωL)
+        @test all(==("newton"), t.step[2:end])
         @test all(==(1), t.fraction[2:end])
 
         # ---- the hookstep from a guess far from it: an equilibrium that is not the laminar state ----
