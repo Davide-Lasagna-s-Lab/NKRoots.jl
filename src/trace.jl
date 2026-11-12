@@ -19,14 +19,36 @@ after every iteration it records
   Jacobian of your own are not seen;
 - `krylov`, the relative residual of the GMRES solution of the Newton system after each Arnoldi
   step of the iteration (empty at the start);
-- `step`, `"newton"` if the accepted step is the GMRES step, `"hook"` if it lies on the boundary
-  of the trust region, `"line"` if backtracking has shortened it (empty at the start);
-- `radius`, the trust-region radius with which the accepted step was computed, or its length
-  without a trust region (at the start, the initial radius), `steplength`, the length of that
-  step, and `ratio`, the ratio of the actual to the predicted reduction of `‖r‖²`;
-- `rejected`, the number of trials with a ratio below `eta`, and `trials`, the radius and the
-  ratio of every trial but the accepted one, in order;
+- `step`, the kind of the accepted step: `"newton"` if it is the GMRES step, `"hook"` if it lies on
+  the boundary of the trust region, `"line"` if backtracking has shortened it (empty at the start);
+- `steplength`, the length `‖δx‖` of the accepted step, in the `norm` of the vectors, also when a
+  preconditioner is used (`NaN` at the start);
+- `fraction`, the fraction of the GMRES step that the accepted step is, its length over the length
+  of the GMRES step of the iteration, both in the `norm` of the vectors. It is 1 for a `"newton"`
+  step. With backtracking it is the λ by which the GMRES step was shortened, the cap of `Δmax`
+  included. For a `"hook"` step it is below 1, unless the geodesic acceleration, which is part of
+  the step and of its length, makes it longer (`NaN` at the start);
+- `radius`, the trust-region radius with which the accepted step was computed. A `"newton"` step
+  is shorter than its radius, a `"hook"` step is as long. Without a trust region, with
+  `globalisation=:backtracking` or `:none`, it is the length of the step again. At the start it
+  is the initial radius `Δ`;
+- `globalisation`, the keyword `globalisation` of the search that made the record;
+- `ratio`, the ratio of the actual to the predicted reduction of `‖r‖²` of the accepted step
+  (`NaN` at the start);
+- `trials`, the other trials of the iteration, in the order they were made, each as the pair of
+  its radius and its ratio. With backtracking these are the steps that were refused before the
+  accepted one, each half as long as the one before and with its length as radius. The accepted
+  step is then the fraction `2^-length(trials)` of the GMRES step, which is `fraction`, unless
+  `Δmax` has capped it first;
+- `rejected`, the number of those trials with a ratio not above `eta`. It is `length(trials)` with
+  backtracking and with `trust=:classical`. With `trust=:scan` some trials are good steps that
+  were not chosen, and it is smaller;
 - `x`, a copy of the iterate, only with `keep=true`.
+
+Printed, a trace is a table with one row per record, with the columns `‖F‖`, `‖δx‖` for
+`steplength`, `Δ` for `radius`, `λ` for `fraction`, `ρ` for `ratio`, the dimension of the Krylov
+space, the cumulative products, the rejected trials and the time. The `Δ` cell is blank in the
+records of a search without a trust region, where the field `radius` holds the length of the step.
 
 The same trace can follow several calls to `nkroot!`; the iteration numbers restart at zero with
 each call. A callback that also stops the search can call the trace first:
@@ -54,9 +76,11 @@ struct Trace
                       step::Vector{String}                          # "newton", "hook" or "line"
                     radius::Vector{Float64}                         # radius of the accepted step
                 steplength::Vector{Float64}                         # length of the accepted step
+                  fraction::Vector{Float64}                         # its length over that of the GMRES step
                      ratio::Vector{Float64}                         # actual over predicted reduction of ‖r‖²
                   rejected::Vector{Int}                             # trials with a ratio below eta
                     trials::Vector{Vector{Tuple{Float64, Float64}}} # radius and ratio of the other trials
+             globalisation::Vector{Symbol}                          # globalisation of the search
                          x::Vector{Any}                             # copies of the iterates, with keep=true
                       keep::Bool                                    # keep the iterates
                         t₀::Base.RefValue{Float64}                  # wall-clock time of the first record
@@ -76,8 +100,10 @@ struct Trace
                                     Float64[],
                                     Float64[],
                                     Float64[],
+                                    Float64[],
                                     Int[],
                                     Vector{Tuple{Float64, Float64}}[],
+                                    Symbol[],
                                     Any[],
                                     keep,
                                     Ref(0.0))
@@ -101,9 +127,11 @@ function (trace::Trace)(info::NamedTuple)
     push!(trace.step,           info.step)
     push!(trace.radius,         info.radius)
     push!(trace.steplength,     info.steplength)
+    push!(trace.fraction,       info.fraction)
     push!(trace.ratio,          info.ratio)
     push!(trace.rejected,       info.rejected)
     push!(trace.trials,         copy(info.trials))
+    push!(trace.globalisation,  info.globalisation)
     trace.keep && push!(trace.x, copy(info.x))
 
     return false
@@ -116,22 +144,25 @@ function Base.show(io::IO, ::MIME"text/plain", trace::Trace)
     println(io, "Trace with $(length(trace)) records")
     length(trace) == 0 && return
 
-    names  = ("iter", "‖F‖", "Δ", "ρ", "dim K", "products", "rej.", "time")
-    widths = (4, 10, 8, 7, 5, 8, 4, 7)
+    names  = ("iter", "‖F‖", "‖δx‖", "Δ", "λ", "ρ", "dim K", "products", "rej.", "time")
+    widths = (4, 10, 9, 9, 9, 7, 5, 8, 4, 7)
 
     println(io, _rule("╭", "┬", "╮", widths))
     println(io, _cells(names, widths))
     println(io, _rule("├", "┼", "┤", widths))
     for i in eachindex(trace.res)
-        first = trace.iter[i] == 0
-        cells = (string(trace.iter[i]),
-                 @sprintf("%.4e", trace.res[i]),
-                 @sprintf("%.2e", trace.radius[i]),
-                 first ? "" : @sprintf("%.3f", trace.ratio[i]),
-                 first ? "" : string(length(trace.krylov[i])),
-                 string(trace.products[i]),
-                 first ? "" : string(trace.rejected[i]),
-                 @sprintf("%.1f", trace.time[i]))
+        first  = trace.iter[i] == 0
+        region = trace.globalisation[i] === :hookstep # the radius is one of a trust region
+        cells  = (string(trace.iter[i]),
+                  @sprintf("%.4e", trace.res[i]),
+                  first ? "" : @sprintf("%.2e", trace.steplength[i]),
+                  region ? @sprintf("%.2e", trace.radius[i]) : "",
+                  first ? "" : @sprintf("%.2e", trace.fraction[i]),
+                  first ? "" : @sprintf("%.3f", trace.ratio[i]),
+                  first ? "" : string(length(trace.krylov[i])),
+                  string(trace.products[i]),
+                  first ? "" : string(trace.rejected[i]),
+                  @sprintf("%.1f", trace.time[i]))
         println(io, _cells(cells, widths))
     end
     print(io, _rule("╰", "┴", "╯", widths))

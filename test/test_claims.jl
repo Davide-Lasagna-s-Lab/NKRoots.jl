@@ -530,12 +530,58 @@ end
         @test a.trace.res == b.trace.res
     end
 
-    @testset "the printed table shows λ in place of Δ, and the shortened steps" begin
-        io = IOBuffer()
-        nkroot!(arctan!, fill(10.0, 3); jacobian=:ad, globalisation=:backtracking, maxiter=50, io=io)
-        lines = split(String(take!(io)), "\n")
-        @test occursin("λ", lines[2]) && !occursin("Δ", lines[2])
-        @test any(occursin("↓ line", l) for l in lines)
+    @testset "the fraction of the GMRES step is the λ of backtracking, and 1 for a full step" begin
+        t = search(arctan!, fill(10.0, 3); jacobian=:ad, globalisation=:backtracking, maxiter=50).trace
+        @test isnan(t.fraction[1])
+        @test "line" in t.step && "newton" in t.step
+        for k in 2:length(t.res)
+            @test t.fraction[k] == 2.0^-length(t.trials[k])
+            t.step[k] == "newton" && @test t.fraction[k] == 1
+        end
+
+        # classical Newton takes the whole step, and a cap of Δmax is part of the fraction
+        none = search(two!, [1.8, 0.7]; jacobian=:ad, globalisation=:none, tol=1e-12).trace
+        @test all(==(1), none.fraction[2:end])
+        cap  = search(arctan!, fill(10.0, 3); jacobian=:ad, globalisation=:backtracking, Δmax=0.5, maxiter=1).trace
+        @test cap.fraction[2] < 1
+        @test cap.steplength[2] ≈ 0.5 * 2.0^-length(cap.trials[2])
+    end
+
+    @testset "the fraction of a hookstep is its length over that of the GMRES step" begin
+        x₀ = [1.8, 0.7]
+        ℓ  = norm(jacobian_two(x₀) \ two!(zeros(2), x₀))
+        t  = search(two!, x₀; jacobian=:ad, Δ=0.1, tol=1e-12).trace
+        @test t.step[2] == "hook"
+        @test t.fraction[2] ≈ 0.1/ℓ rtol=1e-8
+        @test all(t.fraction[k] == 1 for k in 2:length(t.res) if t.step[k] == "newton")
+        @test all(t.fraction[k] < 1 for k in 2:length(t.res) if t.step[k] == "hook")
+        @test all(==(:hookstep), t.globalisation)
+    end
+
+    @testset "the printed table has the same columns for every globalisation, with Δ blank without a trust region" begin
+        tables = map((:hookstep, :backtracking, :none)) do globalisation
+            io = IOBuffer()
+            nkroot!(arctan!, fill(10.0, 3); jacobian=:ad, globalisation=globalisation, maxiter=50, io=io)
+            split(String(take!(io)), "\n")
+        end
+        @test tables[1][2] == tables[2][2] == tables[3][2]
+        @test all(occursin(name, tables[1][2]) for name in ("‖δx‖", "Δ", "λ", "ρ"))
+        @test any(occursin("↓ line", l) for l in tables[2])
+
+        # the Δ cell, the fourth, is filled in every row with a trust region and blank without
+        cell(line) = strip(split(line, "│")[5])
+        @test all(!isempty(cell(l)) for l in tables[1][4:end - 3])
+        @test all(isempty(cell(l)) for l in tables[2][4:end - 3])
+        @test all(isempty(cell(l)) for l in tables[3][4:end - 3])
+
+        # a step that grows without bound keeps the columns aligned, as classical Newton on arctan
+        @test length(unique(textwidth.(tables[3][1:end - 2]))) == 1
+
+        # the printed trace has them too
+        t     = search(arctan!, fill(10.0, 3); jacobian=:ad, globalisation=:backtracking, maxiter=50).trace
+        lines = split(sprint(show, MIME("text/plain"), t), "\n")
+        @test all(occursin(name, lines[3]) for name in ("‖δx‖", "Δ", "λ"))
+        @test all(isempty(cell(l)) for l in lines[5:end - 1])
     end
 
     @testset "globalisation must be :hookstep, :backtracking or :none" begin

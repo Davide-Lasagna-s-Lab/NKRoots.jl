@@ -16,10 +16,11 @@
 # It returns the accepted trial: the coordinates `y` of its step, its `kind`, "newton" for
 # the GMRES step, "hook" for a hookstep on the boundary of the trust region and "line" for a GMRES
 # step shortened by backtracking, its ratio `ρ`, the radius `used` with which it was computed (its
-# length without a trust region), the fraction `λ` of the GMRES step that it is (NaN for a
-# hookstep), the radius `Δ` of the next iteration, its point `x`, residual `r` and residual norm
-# `res`, and the radius and ratio of every other trial; or `accepted = false` when the step falls
-# below `Δmin`, the rounding of x, or the residual of classical Newton is not finite.
+# length without a trust region), the radius `Δ` of the next iteration, its point `x`, residual `r`
+# and residual norm `res`, and the radius and ratio of every other trial; or `accepted = false` when
+# the step falls below `Δmin`, the rounding of x, or the residual of classical Newton is not finite.
+# The fraction of the GMRES step that the accepted step is comes from the lengths of the two, in
+# nkroot!, for every rule alike.
 
 # the factors of the radius tried by scan=:greedy, 1/8 to 8 in steps of √2
 const SCAN = 2.0 .^ (-3:0.5:3)
@@ -79,7 +80,6 @@ function _classical(trial!, model, ws, Δ; Δmax, eta, Δmin)
                     kind     = at ? "hook" : "newton",
                     ρ        = ρ,
                     used     = used,
-                    λ        = NaN,
                     Δ        = Δ,
                     x        = ws.xn,
                     r        = ws.rn,
@@ -130,7 +130,6 @@ function _greedy(trial!, model, ws, Δ; Δmax, eta, Δmin)
                     kind     = atb ? "hook" : "newton",
                     ρ        = tried[best][2],
                     used     = tried[best][1],
-                    λ        = NaN,
                     Δ        = min(model.len(yb), Δmax),
                     x        = ws.xb,
                     r        = ws.rb,
@@ -143,7 +142,6 @@ function _greedy(trial!, model, ws, Δ; Δmax, eta, Δmin)
                     kind     = "hook",
                     ρ        = NaN,
                     used     = Δ,
-                    λ        = NaN,
                     Δ        = Δ,
                     x        = ws.xb,
                     r        = ws.rb,
@@ -209,7 +207,6 @@ function _longest(trial!, model, ws, Δ; Δmax, eta, Δmin)
                         kind     = "hook",
                         ρ        = NaN,
                         used     = ρr,
-                        λ        = NaN,
                         Δ        = ρr,
                         x        = ws.xb,
                         r        = ws.rb,
@@ -227,7 +224,6 @@ function _longest(trial!, model, ws, Δ; Δmax, eta, Δmin)
             kind     = atb ? "hook" : "newton",
             ρ        = tried[best][2],
             used     = tried[best][1],
-            λ        = NaN,
             Δ        = min(model.len(yb), Δmax),
             x        = ws.xb,
             r        = ws.rb,
@@ -259,7 +255,6 @@ function _backtracking(trial!, model, ws, Δ; Δmax, eta, Δmin)
                     kind     = λ == 1 ? "newton" : "line",
                     ρ        = ρ,
                     used     = λ * ℓ,
-                    λ        = λ,
                     Δ        = Δ,
                     x        = ws.xn,
                     r        = ws.rn,
@@ -280,7 +275,6 @@ function _full(trial!, model, ws, Δ)
             kind     = "newton",
             ρ        = ρ,
             used     = model.len(yN),
-            λ        = 1.0,
             Δ        = Δ,
             x        = ws.xn,
             r        = ws.rn,

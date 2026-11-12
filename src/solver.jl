@@ -71,15 +71,24 @@ Solve `F(x) = 0` by Newton–Krylov from the guess `x`, overwritten with the roo
   accepted, by the hookstep and by backtracking.
 - The search stops when `‖r‖ < tol`, after `maxiter` iterations, when no step is accepted, or when
   `callback(info)` returns `true`, called at the start and after every iteration with
-  `info = (; iter, x, res, evaluations, krylov, step, radius, steplength, ratio, rejected, trials)`:
+  `info = (; iter, x, res, evaluations, krylov, step, radius, steplength, fraction, ratio, rejected,
+  trials, globalisation)`:
   the cumulative counts of the calls of the arguments (residuals, Jacobian products, preconditioner
   applications, moves of `J` and of `M`, calls of `gram`, and every call of `F`, those of a Jacobian
   built by NKRoots.jl included), the
   relative residual of the GMRES solution after each Arnoldi step, `"newton"` for the GMRES step,
   `"hook"` for a hookstep on the boundary of the trust region or `"line"` for a GMRES step
   shortened by backtracking, the radius of the accepted step (its length without a trust region),
-  its length, its ratio, the number of rejected trials and the radius and ratio of every trial but
-  the accepted one. A [`Trace`](@ref) records them.
+  its length, the fraction of the GMRES step that it is (its length over that of the GMRES step: 1
+  for a `"newton"` step, the λ of backtracking, below 1 for a hookstep unless the geodesic
+  acceleration lengthens it; `NaN` at the start), its ratio, the number of rejected trials, the
+  radius and ratio of every trial but the accepted one, and the keyword `globalisation`. A
+  [`Trace`](@ref) records them.
+- With `verbose=true` a table is printed, one row per iteration, with the same columns for every
+  globalisation: `‖F‖`, the length `‖δx‖` of the accepted step, the radius `Δ` of the trust region
+  after the iteration (blank without a trust region), the fraction `λ`, the ratio `ρ`, the
+  dimension of the Krylov space, the relative residual of GMRES, the kind of step and the number of
+  rejected trials.
 
 The vectors must broadcast and support `similar`, `dot` and `norm`.
 """
@@ -139,10 +148,12 @@ function nkroot!(F!, J, x; precond=nothing,
     iter   = 0
 
     # ---- the start ----
-    verbose && _print_header(io, globalisation)
-    verbose && _print_row(io, 0, res, Δ, NaN, 0, NaN, "", 0)
+    region = globalisation === :hookstep    # whether a trust region bounds the step
+    verbose && _print_header(io)
+    verbose && _print_row(io, 0, res, NaN, region ? Δ : NaN, NaN, NaN, 0, NaN, "", 0)
     stop = callback((; iter, x, res, evaluations=evaluations(), krylov=Float64[], step="", radius=Δ,
-                       steplength=NaN, ratio=NaN, rejected=0, trials=Tuple{Float64, Float64}[]))
+                       steplength=NaN, fraction=NaN, ratio=NaN, rejected=0,
+                       trials=Tuple{Float64, Float64}[], globalisation))
 
     while iter < maxiter
         stop && (status = :stopped; break)
@@ -177,12 +188,18 @@ function nkroot!(F!, J, x; precond=nothing,
         res      = t.res
         rejected = count(q -> !(q[2] > eta), t.trials)
 
+        # ---- the length of the step, and the fraction of the GMRES step that it is: 1 for the GMRES
+        #      step, the λ of backtracking, the cap of Δmax included, and for a hookstep its length over
+        #      that of the GMRES step, with the geodesic acceleration if it has one ----
+        steplength = model.len(t.y)
+        fraction   = steplength / model.len(model.hook(Inf)[1])
+
         # ---- output ----
-        verbose && _print_row(io, iter, res, globalisation === :hookstep ? Δ : t.λ, t.ρ, model.dim,
+        verbose && _print_row(io, iter, res, steplength, region ? Δ : NaN, fraction, t.ρ, model.dim,
                               model.krylov[end], t.kind, rejected)
         stop = callback((; iter, x, res, evaluations=evaluations(), krylov=model.krylov, step=t.kind,
-                           radius=t.used, steplength=model.len(t.y), ratio=t.ρ, rejected,
-                           trials=t.trials))
+                           radius=t.used, steplength, fraction, ratio=t.ρ, rejected,
+                           trials=t.trials, globalisation))
     end
 
     res < tol && (status = :converged)
