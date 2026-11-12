@@ -5,7 +5,7 @@
 # Settings: 20 × 20 points, guess zero, finite-difference Jacobian, no preconditioner, Δ = 1,
 # krylov_dim = 120, krylov_tol = 1e-6, tol = 1e-6.
 #
-#     julia --project=examples examples/vectors.jl
+#     julia --project=examples examples/vectors/vectors.jl
 using LinearAlgebra
 using NKRoots
 

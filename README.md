@@ -20,6 +20,8 @@ The package has four parts, and this page follows them.
   directions.
 - **Tracing.** A callback at every iteration, and `Trace`, which records what a search does.
 
+Two larger examples from fluid dynamics follow, and then the mathematics of the method.
+
 **Contents.**
 [Installation](#installation) ·
 [A first search](#a-first-search) ·
@@ -28,7 +30,7 @@ The package has four parts, and this page follows them.
 [Globalisation](#globalisation) ·
 [Preconditioning](#preconditioning) ·
 [Tracing and callbacks](#tracing-and-callbacks) ·
-[A turbulent channel](#a-turbulent-channel) ·
+[Examples](#examples) ·
 [How it works](#how-it-works) ·
 [Tests](#tests) ·
 [References](#references)
@@ -40,12 +42,14 @@ using Pkg
 Pkg.add(url="https://github.com/Davide-Lasagna-s-Lab/NKRoots.jl")
 ```
 
-The scripts of `examples/` have their own environment, with CairoMakie for the figures. Every
-number and figure on this page comes from one of them.
+Each example is a folder of `examples/`, with its script and the figure that the script writes.
+The examples share one environment, `examples/Project.toml`, with CairoMakie for the figures. Every
+number and figure on this page comes from one of them. A script is run from the root of the
+repository.
 
 ```
 julia --project=examples -e 'using Pkg; Pkg.instantiate()'
-julia --project=examples examples/route.jl
+julia --project=examples examples/route/route.jl
 ```
 
 ## A first search
@@ -95,7 +99,7 @@ one says. The first three steps lie on the boundary of the trust region and are 
 the Newton step. The last four are full Newton steps, and the residual falls quadratically.
 [The printed table](#the-printed-table) explains every column.
 
-![Routes of four searches on two equations](examples/figures/route.png)
+![Routes of four searches on two equations](examples/route/route.png)
 
 The figure shows four searches on the landscape of $\tfrac12\lVert F\rVert^2$, with the same
 settings but for `maxiter=50`. The blue and orange curves are the two equations, and they cross at
@@ -104,7 +108,7 @@ valley with no root and stops with the status `:collapsed`. Every accepted step 
 $\lVert F\rVert$, so a search can end at a local minimum of $\lVert F\rVert$ if the guess leads
 there.
 
-Script: [`examples/route.jl`](examples/route.jl).
+Script: [`examples/route/route.jl`](examples/route/route.jl).
 
 ## The interface
 
@@ -147,8 +151,9 @@ the rounding of $F$ divided by $\varepsilon$. The keyword `ϵ` sets $\delta$ by 
 itself is never approximated, so a root found with an approximate Jacobian still satisfies the
 equations to `tol`.
 
-Dual numbers give the product exactly, to rounding, at one call of `F!` on dual numbers. The
-product by finite differences is the matrix-free approximation described by Knoll and Keyes [3].
+Dual numbers give the product exactly, to rounding, at one call of `F!` on dual numbers. They are
+the forward mode of automatic differentiation [23]. The product by finite differences is the
+matrix-free approximation described by Knoll and Keyes [3].
 
 An operator of your own is any object `J` with two methods. `mul!(out, J, v)` writes the product
 $Jv$ into `out`. `NKRoots.update!(J, x, r)` moves the operator to the point `x`, where `r = F(x)`,
@@ -192,12 +197,12 @@ jacobian=:fd, ϵ=1e-2               12 steps, 24 products, 37 calls of F, ‖F�
 The four accurate Jacobians follow the same path. The coarse finite difference still converges,
 because the residual is exact, but it loses the quadratic phase and needs four more steps.
 
-![Convergence with five Jacobians](examples/figures/jacobians.png)
+![Convergence with five Jacobians](examples/jacobians/jacobians.png)
 
 `jacobianFD(F!, x; difference, ϵ)` and `jacobianAD(F!, x)` build the first three operators as
 objects, to pass as `J` or to use elsewhere. `J*v` and `mul!(out, J, v)` apply them.
 
-Script: [`examples/jacobians.jl`](examples/jacobians.jl).
+Script: [`examples/jacobians/jacobians.jl`](examples/jacobians/jacobians.jl).
 
 ### The vectors
 
@@ -243,7 +248,7 @@ and `NKRoots.lincomb!`, and of `length`, `getindex` and `empty!` on the containe
 "a type of vectors can bring its own basis" in [`test/test_claims.jl`](test/test_claims.jl) is a
 complete example.
 
-Script: [`examples/vectors.jl`](examples/vectors.jl).
+Script: [`examples/vectors/vectors.jl`](examples/vectors/vectors.jl).
 
 ### The keywords
 
@@ -378,14 +383,14 @@ The figure shows searches from $u = 0$ with `precond=lu(A)`, `Δ=1`, `tol=1e-10`
 On the left `krylov_tol` varies and `krylov_dim` is 50. On the right `krylov_dim` varies and
 `krylov_tol` is $10^{-8}$.
 
-![The effect of krylov_tol and krylov_dim](examples/figures/krylov.png)
+![The effect of krylov_tol and krylov_dim](examples/krylov/krylov.png)
 
 A loose tolerance gives cheap iterations that converge linearly, and a tight one fewer iterations
 with more products each. [How it works](#how-well-to-solve-the-newton-system) gives the reason. A
 space of one vector still converges, more slowly. The right choice depends on what a product costs
 against a residual, and `1e-3` is a middle value.
 
-Script: [`examples/krylov.jl`](examples/krylov.jl).
+Script: [`examples/krylov/krylov.jl`](examples/krylov/krylov.jl).
 
 ## Globalisation
 
@@ -426,9 +431,9 @@ settings = (jacobian=:ad, precond=lu(A), krylov_tol=1e-6, tol=1e-8, maxiter=100,
 | `trust=:scan, scan=:greedy` | `:converged` | 12 | 89 | 143 | 232 |
 | `trust=:scan, scan=:longest` | `:converged` | 40 | 110 | 500 | 610 |
 | `trust=:classical, acceleration=:geodesic` | `:converged` | 18 | 33 | 243 | 276 |
-| `trust=:scan, scan=:longest, acceleration=:geodesic` | `:converged` | 12 | 44 | 145 | 189 |
+| `trust=:scan, scan=:longest, acceleration=:geodesic` | `:converged` | 13 | 42 | 153 | 195 |
 
-![The residual of seven searches on the Bratu problem](examples/figures/globalisation.png)
+![The residual of seven searches on the Bratu problem](examples/globalisation/globalisation.png)
 
 The outcome depends on the guess, so the script repeats the seven searches from the guesses
 $a\sin(\pi x)$ with $a = 1, \dots, 20$.
@@ -447,7 +452,7 @@ On this problem classical Newton and backtracking converge from half of the gues
 half, and the hookstep from all of them with every rule. Where the first two converge they are
 cheap, since they spend one residual per iteration.
 
-Script: [`examples/globalisation.jl`](examples/globalisation.jl).
+Script: [`examples/globalisation/globalisation.jl`](examples/globalisation/globalisation.jl).
 
 ### Classical Newton
 
@@ -554,7 +559,7 @@ leaves the guess along the steepest descent and ends at the Newton step, which l
 and raises the residual. The dashed circles have radii 0.1, 0.25 and 0.5. The right panel is the
 ratio `ρ` of each step.
 
-![The step for each radius, and the ratio](examples/figures/hookstep.png)
+![The step for each radius, and the ratio](examples/hookstep/hookstep.png)
 
 One step on a given radius can be seen by fixing the radius with `Δmax` and accepting every trial
 with `eta=-Inf`.
@@ -580,7 +585,7 @@ largest radius, and a small cap forces short steps throughout. `eta` is the smal
 step to be accepted. The lower row of the figure shows each on the two equations, from `(2.5, 2)`
 for `Δ` and `Δmax` and from `(1.8, 0.7)` with `Δ=0.9` for `eta`, with `tol=1e-12` and dual numbers.
 
-![The two rules and the three options](examples/figures/update_rules.png)
+![The two rules and the three options](examples/update_rules/update_rules.png)
 
 On the test problem the classical rule converges in 21 iterations.
 
@@ -589,8 +594,8 @@ nkroot!(bratu!, guess(); Δ=1.0, settings...)
 # (status = :converged, iter = 21, res = 1.6440964169558804e-10)
 ```
 
-Scripts: [`examples/hookstep.jl`](examples/hookstep.jl),
-[`examples/update_rules.jl`](examples/update_rules.jl).
+Scripts: [`examples/hookstep/hookstep.jl`](examples/hookstep/hookstep.jl),
+[`examples/update_rules/update_rules.jl`](examples/update_rules/update_rules.jl).
 
 ### The scan rules
 
@@ -606,7 +611,7 @@ takes the fewest iterations and the fewest products among the plain rules.
 
 ```julia
 nkroot!(bratu!, guess(); Δ=1.0, trust=:scan, scan=:greedy, settings...)
-# (status = :converged, iter = 12, res = 1.919762301404373e-10)
+# (status = :converged, iter = 12, res = 1.5699714843923932e-10)
 ```
 
 With `scan=:longest` the search keeps the largest radius whose step is still accepted, ρ > `eta`.
@@ -619,7 +624,7 @@ longest step that still descends gains little at first and reaches the solution 
 
 ```julia
 nkroot!(bratu!, guess(); Δ=1.0, trust=:scan, scan=:longest, settings...)
-# (status = :converged, iter = 40, res = 2.6486640731310253e-10)
+# (status = :converged, iter = 40, res = 2.9299031423172054e-10)
 ```
 
 On the test problem the longest step is the slowest of the rules. It is made for a different
@@ -651,13 +656,13 @@ nkroot!(valley!, x; jacobian=:ad, Δ=1.0, tol=1e-12, maxiter=500, trust=:scan, s
 # (status = :converged, iter = 11, res = 1.895230234692832e-15)
 ```
 
-![The routes of trust=:classical and scan=:longest along a narrow bent valley](examples/figures/longest.png)
+![The routes of trust=:classical and scan=:longest along a narrow bent valley](examples/longest/longest.png)
 
 The circles are the trust regions of the accepted steps. The classical rule and the greedy scan
 drop to the floor of the valley and then follow it in steps shorter than a hundredth. The longest
 step stays above the floor and crosses the valley in a few steps longer than a tenth.
 
-Script: [`examples/longest.jl`](examples/longest.jl).
+Script: [`examples/longest/longest.jl`](examples/longest/longest.jl).
 
 ### Geodesic acceleration
 
@@ -684,27 +689,27 @@ nkroot!(valley!, x; jacobian=:ad, Δ=1.0, tol=1e-12, maxiter=500, acceleration=:
 
 On the valley of the last subsection the classical rule takes 10 iterations with the acceleration
 in place of 210. These two equations are quadratic, so the second derivative is the same everywhere
-and its finite difference is exact. With the scan of the longest step the acceleration takes 7
+and its finite difference is exact. With the scan of the longest step the acceleration takes 8
 iterations in place of 11.
 
-![The routes of the classical rule without and with the geodesic acceleration, and the residual of four searches](examples/figures/geodesic.png)
+![The routes of the classical rule without and with the geodesic acceleration, and the residual of four searches](examples/geodesic/geodesic.png)
 
 The settings are those of the last subsection. The circles are the trust regions of the accepted
 steps. The middle panel shows the residual against the iterations, and the right one against the
 residuals and Jacobian products evaluated.
 
 On the Bratu test problem the gain is smaller, 18 iterations in place of 21 with the classical rule
-and 12 in place of 40 with the longest step.
+and 13 in place of 40 with the longest step.
 
 ```julia
 nkroot!(bratu!, guess(); Δ=1.0, acceleration=:geodesic, settings...)
 # (status = :converged, iter = 18, res = 1.9796876435530597e-10)
 
 nkroot!(bratu!, guess(); Δ=1.0, trust=:scan, scan=:longest, acceleration=:geodesic, settings...)
-# (status = :converged, iter = 12, res = 1.3128326877455355e-9)
+# (status = :converged, iter = 13, res = 1.842140886476726e-10)
 ```
 
-Script: [`examples/geodesic.jl`](examples/geodesic.jl).
+Script: [`examples/geodesic/geodesic.jl`](examples/geodesic/geodesic.jl).
 
 ### Which one
 
@@ -807,7 +812,7 @@ nkroot!(diffusion!, fill(1.0, N); precond=Diffusion(nothing), options...)       
 The three searches take the same seven iterations, since GMRES solves to the same tolerance. The
 frozen operator loses accuracy as the point moves away from the guess, and the moving one does not.
 
-![A preconditioner on the Bratu problem, on a nonlinear diffusion, and flexible GMRES](examples/figures/preconditioner.png)
+![A preconditioner on the Bratu problem, on a nonlinear diffusion, and flexible GMRES](examples/preconditioner/preconditioner.png)
 
 ### The length of the step and `gram`
 
@@ -916,7 +921,7 @@ has a component of order $10^{7}$ along the slow direction, and no search reache
 the Gram matrix the first step leaves most of the residual, and twenty steps do not reach the floor.
 The right panel of the figure above shows the three searches.
 
-Script: [`examples/preconditioner.jl`](examples/preconditioner.jl).
+Script: [`examples/preconditioner/preconditioner.jl`](examples/preconditioner/preconditioner.jl).
 
 ## Tracing and callbacks
 
@@ -1043,7 +1048,7 @@ iterations the Krylov space reaches its cap of 50 vectors, and the GMRES step of
 shorter than the radius. Then come hooksteps, some after a rejected trial, and at the end Newton
 steps with the quadratic fall of the residual. The last panel shows the iterates, light to dark.
 
-![The fields of a Trace](examples/figures/tracing.png)
+![The fields of a Trace](examples/tracing/tracing.png)
 
 ### Callbacks
 
@@ -1073,11 +1078,16 @@ end
 
 The last line of the file is `■ stopped by the callback: 3 steps, ‖F‖ = 4.539e-07, 4 residuals, 6 Jacobian products`.
 
-Script: [`examples/tracing.jl`](examples/tracing.jl).
+Script: [`examples/tracing/tracing.jl`](examples/tracing/tracing.jl).
 
-## A turbulent channel
+## Examples
 
-A larger example, the mean flow of a turbulent channel with the Spalart–Allmaras model. It has two
+Two problems from fluid dynamics, each with a preconditioner taken from its stiff linear part,
+the diffusion in the first and the Stokes operator in the second.
+
+### The turbulent channel
+
+The mean flow of a turbulent channel with the model of Spalart and Allmaras [24]. It has two
 coupled fields, a strong nonlinearity and a stiff operator, and it uses a preconditioner that
 follows the point.
 
@@ -1134,7 +1144,7 @@ The diffusion needs a fifth of the products, about 14 per iteration. The Laplaci
 the diffusion but not its coefficient, because the eddy viscosity away from the wall is far larger
 than the viscosity.
 
-![Spalart–Allmaras channel](examples/figures/spalart_allmaras.png)
+![Spalart–Allmaras channel](examples/spalart_allmaras/spalart_allmaras.png)
 
 The left and middle panels show the solutions at three Reynolds numbers, with the logarithmic law
 and the line $\tilde\nu^+ = \kappa y^+$ for reference. The momentum equation integrates to
@@ -1147,7 +1157,136 @@ $Re_\tau = 1000$ falls with the fourth power of the spacing, the order of the st
 | 300 | $4.32\times 10^{-6}$ | 4.00 |
 | 600 | $2.70\times 10^{-7}$ | 4.00 |
 
-Script: [`examples/spalart_allmaras.jl`](examples/spalart_allmaras.jl).
+Script: [`examples/spalart_allmaras/spalart_allmaras.jl`](examples/spalart_allmaras/spalart_allmaras.jl).
+
+### Equilibria of Kolmogorov flow
+
+A two-dimensional flow, periodic on the square $[0, 2\pi)^2$ and driven by the force
+$\sin(4y)\,\mathbf e_x$ at $Re = 40$, as in the catalogue of Golden [25]. With the vorticity
+$\omega$, an equilibrium is a root of
+
+$$N(\omega) = \mathbf u\cdot\nabla\omega - \frac{1}{Re}\nabla^2\omega + 4\cos(4y) = 0,$$
+
+where the velocity $\mathbf u$ comes from $\omega$ through the streamfunction. The paper searches
+travelling waves and equilibria together, with the wave speed as an unknown and a phase condition on
+the Newton step. This example keeps to equilibria. The formulation is written out in
+[`notes/kolmogorov/kolmogorov.pdf`](notes/kolmogorov/kolmogorov.pdf).
+
+**The shift.** The forcing does not depend on $x$, so every shifted copy $\omega(x + s, y)$ of an
+equilibrium is an equilibrium. The derivative of $N(\omega(x + s, y)) = 0$ in $s$ is
+$N'(\omega)\,\partial_x\omega = 0$, so the Jacobian is singular there. The example removes the shift
+by a symmetry. It searches among the fields that the rotation $(x, y) \to (-x, -y)$ leaves as they
+are. Each term of $N$ keeps that symmetry. The forcing is even in $y$ and constant in $x$. The
+Laplacian has two derivatives, whose signs cancel. In the advection the velocity and the gradient
+each change sign, and their product does not. In this subspace $\partial_x\omega$ changes sign under
+the rotation, so it is not a member, the Jacobian has lost that null vector, and a state cannot
+drift. Every root is an equilibrium. Equilibria without the symmetry are not found.
+
+**The discretisation.** The vorticity is on a grid of 128 × 128 points, with derivatives by the fast
+Fourier transform and the two-thirds rule, $|k_x|, |k_y| \le 42$. The unknown is the matrix of the
+values on the grid. The residual is
+
+$$G(\omega) = \Pi\,N(\Pi\omega) + (I - \Pi)\,\omega,$$
+
+where the projector $\Pi$ discards the modes beyond the rule, removes the mean and takes the real
+part of every Fourier coefficient. The real part is the symmetric part of the field, because the
+coefficient of the rotated field at $\mathbf k$ is the one at $-\mathbf k$, its conjugate. Outside
+the range of $\Pi$ the residual is the identity, so the Newton step subtracts whatever rounding puts
+there, and the iterates stay in the subspace.
+
+**The preconditioner.** The stiff part is the viscous term, with eigenvalues from $1/Re$ to
+$2\cdot42^2/Re = 88$ on the kept modes. The preconditioner is the Stokes operator
+$-\nabla^2/Re$ on the range of $\Pi$ and the identity elsewhere. It is diagonal in Fourier space, so
+`ldiv!` multiplies each kept coefficient by $Re/|\mathbf k|^2$, at the cost of two transforms. The
+paper applies $Re\,\nabla^{-2}$ on the left of the Newton system and reports that it was critical
+to the success of GMRES. Here the same operator acts on the right, so that the trust region stays
+on the step in $\omega$.
+
+```julia
+include(joinpath(pkgdir(NKRoots), "examples", "kolmogorov", "problem.jl"))
+
+K = Kolmogorov(128; Re=40)
+G!(out, ω) = residual!(out, ω, K)
+
+ω = guess(K, 4)
+nkroot!(G!, ω; precond=Stokes(K), Δ=20.0, krylov_dim=200, krylov_tol=1e-2, tol=1e-8, maxiter=80)
+```
+
+`guess(K, seed)` is the guess of the paper made symmetric. It is random noise filtered at a
+wavenumber of 4, 5 or 6, with zero mean and unit standard deviation. The norm of the solver is the
+Euclidean norm of the values on the grid, 128 times the root mean square. The search of the block,
+from the seed 4, converges in 19 iterations.
+
+```
+╭──────┬────────────┬───────────┬───────────┬───────────┬─────────┬───────┬────────────┬──────────┬──────╮
+│ iter │        ‖F‖ │      ‖δx‖ │         Δ │         λ │       ρ │ dim K │ GMRES res. │     step │ rej. │
+├──────┼────────────┼───────────┼───────────┼───────────┼─────────┼───────┼────────────┼──────────┼──────┤
+│    0 │ 3.7871e+02 │           │  2.00e+01 │           │         │       │            │          │      │
+│    1 │ 3.5780e+02 │  2.00e+01 │  4.00e+01 │  2.54e-02 │   0.956 │    38 │   9.39e-03 │   ↪ hook │    0 │
+│    2 │ 3.2188e+02 │  4.00e+01 │  8.00e+01 │  5.52e-02 │   0.993 │    37 │   8.08e-03 │   ↪ hook │    0 │
+│    3 │ 2.5399e+02 │  8.00e+01 │  1.60e+02 │  9.58e-02 │   1.090 │    40 │   9.43e-03 │   ↪ hook │    0 │
+│    4 │ 1.5820e+02 │  1.60e+02 │  3.20e+02 │  1.77e-02 │   0.886 │    58 │   9.45e-03 │   ↪ hook │    0 │
+│    5 │ 9.7336e+01 │  8.00e+01 │  1.60e+02 │  3.70e-03 │   1.031 │    89 │   8.08e-03 │   ↪ hook │    1 │
+│    6 │ 6.9182e+01 │  4.00e+01 │  8.00e+01 │  8.83e-02 │   1.054 │    81 │   8.98e-03 │   ↪ hook │    1 │
+│    7 │ 6.3234e+01 │  8.00e+01 │  2.00e+01 │  3.98e-01 │   0.228 │    73 │   1.00e-02 │   ↪ hook │    0 │
+│    8 │ 4.3254e+01 │  2.00e+01 │  4.00e+01 │  4.41e-03 │   1.009 │    98 │   9.32e-03 │   ↪ hook │    0 │
+│    9 │ 4.1014e+01 │  4.00e+01 │  4.00e+01 │  1.89e-02 │   0.361 │    95 │   8.62e-03 │   ↪ hook │    0 │
+│   10 │ 3.6968e+01 │  4.00e+01 │  4.00e+01 │  1.78e-02 │   0.520 │    95 │   9.56e-03 │   ↪ hook │    0 │
+│   11 │ 2.8915e+01 │  4.00e+01 │  4.00e+01 │  7.03e-02 │   0.676 │    95 │   8.76e-03 │   ↪ hook │    0 │
+│   12 │ 2.6258e+01 │  4.00e+01 │  4.00e+01 │  1.67e-01 │   0.349 │    81 │   9.60e-03 │   ↪ hook │    0 │
+│   13 │ 2.1775e+01 │  4.00e+01 │  4.00e+01 │  4.01e-01 │   0.424 │    77 │   8.65e-03 │   ↪ hook │    0 │
+│   14 │ 9.2675e+00 │  3.43e+01 │  4.00e+01 │  1.00e+00 │   0.819 │    72 │   9.22e-03 │ → newton │    0 │
+│   15 │ 2.6447e-01 │  5.32e+00 │  4.00e+01 │  1.00e+00 │   0.999 │    67 │   1.00e-02 │ → newton │    0 │
+│   16 │ 2.4326e-03 │  1.99e-01 │  4.00e+01 │  1.00e+00 │   1.000 │    79 │   9.14e-03 │ → newton │    0 │
+│   17 │ 2.2007e-05 │  3.82e-03 │  4.00e+01 │  1.00e+00 │   1.000 │    74 │   9.05e-03 │ → newton │    0 │
+│   18 │ 2.0431e-07 │  2.14e-05 │  4.00e+01 │  1.00e+00 │   1.000 │    75 │   9.28e-03 │ → newton │    0 │
+│   19 │ 1.9558e-09 │  8.53e-08 │  4.00e+01 │  1.00e+00 │   1.000 │    69 │   9.57e-03 │ → newton │    0 │
+╰──────┴────────────┴───────────┴───────────┴───────────┴─────────┴───────┴────────────┴──────────┴──────╯
+  ✓ converged: 19 steps, ‖F‖ = 1.956e-09, 22 residuals, 1393 Jacobian products
+```
+
+**The checks.** The laminar state $\omega = -(Re/4)\cos(4y)$ solves the equations, and the residual
+there is $8\times10^{-12}$ in the norm of the grid. Multiplying $N(\omega) = 0$ by the
+streamfunction and averaging over the square gives the energy balance of an equilibrium, $D = I$,
+with the dissipation $D = \langle\omega^2\rangle/Re$ and the input
+$I = \langle u\sin(4y)\rangle$. The two equilibria of the figure satisfy it to $10^{-13}$.
+
+**The globalisations.** The script runs the guesses of the seeds 1 to 8 with the settings of the
+block above and each globalisation, with at most 80 iterations.
+
+| | converge, of 8 | the others |
+|---|---:|---|
+| `globalisation=:none` | 0 | all reach 80 iterations, with the residual between $2\times10^4$ and $8\times10^5$ |
+| `globalisation=:backtracking` | 0 | five collapse and three reach 80 iterations, with the residual between 150 and 380 |
+| `globalisation=:hookstep` | 2 | six reach 80 iterations, with the residual between 8 and 53 |
+
+The residual of the guesses is a few hundred, 361 for the seed 1. The hookstep converges from the
+seeds 1 and 4, to two different equilibria, in 77 and 19 iterations. From the other six it lowers
+the residual to between 8 and 53, and then the curves of the figure are nearly flat. A search that
+stalls in this way may sit near a local minimum of $\lVert G\rVert$, as the fourth search of
+[the first example](#a-first-search) does. Eight guesses are too few for a statistic.
+
+**GMRES and the preconditioner.** The script solves two Newton systems of the search from the seed
+1 to a relative residual of $10^{-8}$, with and without the preconditioner, in a Krylov space of up
+to 600 vectors. On the first system, at the guess, GMRES with the preconditioner needs 80 vectors,
+and without it 600 vectors reach $10^{-3}$. On the last system, next to the equilibrium, it needs
+182 vectors, and without it 600 vectors reach $0.1$. A search asks for $10^{-2}$ in at most 200
+vectors, which GMRES without the preconditioner does not deliver. The search from the seed 1 without it
+reaches 80 iterations at a residual of 52, after 16000 products, where the preconditioned one
+converges after 8466. This agrees with the statement of the paper.
+
+![Searches for equilibria of Kolmogorov flow](examples/kolmogorov/kolmogorov.png)
+
+Top left, the residual of the 24 searches. Top right, the relative residual of GMRES on the two
+Newton systems. Bottom, the vorticity of the two equilibria, with their dissipation $D$ and their
+kinetic energy $E = \langle|\mathbf u|^2\rangle/2$.
+
+The example tests the solver on a problem from the literature. It is not a survey of the equilibria
+of the flow.
+
+Script: [`examples/kolmogorov/kolmogorov.jl`](examples/kolmogorov/kolmogorov.jl), with the
+discretisation in [`examples/kolmogorov/problem.jl`](examples/kolmogorov/problem.jl). It takes about
+seventeen minutes, most of them in the searches that do not converge.
 
 ## How it works
 
@@ -1170,13 +1309,13 @@ step that makes the model vanish,
 $$J\delta = -r. \tag{1}$$
 
 For a large system $J$ is not stored or factorised, and (1) is solved approximately from products
-$Jv$ alone. Far from a root the neglected term is not small for the solution of (1), and the step
+$Jv$ alone, in a Krylov space. This is a Newton–Krylov method [3, 10, 11, 12, 13]. Far from a root the neglected term is not small for the solution of (1), and the step
 must be restrained. The next two subsections treat the first point, and the ones after them the
 second.
 
 ### The Krylov model and the GMRES step
 
-Let $\beta = \lVert r\rVert$ and $q_1 = -r/\beta$. The Arnoldi iteration builds orthonormal vectors
+Let $\beta = \lVert r\rVert$ and $q_1 = -r/\beta$. The Arnoldi iteration [8] builds orthonormal vectors
 $q_1, \dots, q_{n+1}$, one product with $J$ at a time. Step $j$ computes $Jq_j$, removes its
 components $h_{ij} = q_i\cdot Jq_j$ along the vectors so far, and normalises what is left, of norm
 $h_{j+1,j}$, to give $q_{j+1}$. Written for all $j \le n$ at once, with
@@ -1196,7 +1335,7 @@ The columns of $Q_{n+1}$ and of $Q_n$ are orthonormal, so norms pass to the coor
 
 $$\lVert r + J\delta\rVert = \lVert \beta e_1 - H y\rVert, \qquad \lVert\delta\rVert = \lVert y\rVert. \tag{3}$$
 
-A problem in $N$ unknowns has become one in $n$. The GMRES step $\delta_N = Q_n y_N$ is the
+A problem in $N$ unknowns has become one in $n$. The step of GMRES [9], $\delta_N = Q_n y_N$, is the
 unconstrained minimum,
 
 $$y_N = \arg\min_y \lVert \beta e_1 - H y\rVert. \tag{4}$$
@@ -1219,7 +1358,9 @@ $\lVert r\rVert$, so the second term is quadratic in the residual. While it domi
 convergence looks quadratic. Once $\lVert r\rVert$ is small the first term takes over, and the
 residual falls by the factor $\eta_k$ per iteration. A loose tolerance therefore gives cheap
 iterations and an early linear phase, and a tight one the reverse, the trade-off of inexact Newton
-methods [3] seen in [the Krylov example](#the-krylov-space).
+methods [3, 14] seen in [the Krylov example](#the-krylov-space). The tolerance is the same at every
+iteration here. Choosing it anew at each iteration is the subject of the forcing terms of Eisenstat
+and Walker [15].
 
 ### The trust-region subproblem
 
@@ -1241,7 +1382,9 @@ $-d_i(p_i - d_i s_i) + \mu s_i = 0$, that is
 $$s_i(\mu) = \frac{d_i\,p_i}{d_i^2 + \mu} = \frac{d_i^2}{d_i^2 + \mu}\cdot\frac{p_i}{d_i}. \tag{6}$$
 
 This is the formula of Viswanath [2], and in the original variables it is the damped least-squares
-problem $(H^{\mathsf T}H + \mu I)\,y = H^{\mathsf T}\beta e_1$. There are two cases.
+problem $(H^{\mathsf T}H + \mu I)\,y = H^{\mathsf T}\beta e_1$ of Levenberg [16] and Marquardt [17].
+Problem (5) is the trust-region subproblem of optimisation [18, 19, 21, 22]. Viswanath [2] takes
+the name of its solution, the hookstep, from Dennis and Schnabel [20]. There are two cases.
 
 - If the GMRES step, $\mu = 0$, has $\lVert s(0)\rVert \le \Delta$, it is the solution. The step is
   printed as `→ newton`.
@@ -1262,12 +1405,12 @@ region removes first. The figure shows this on the first Newton system of the Br
 $u = 0$, with no preconditioner, a Krylov space of 100 vectors and a radius of one quarter of the
 length of the GMRES step.
 
-![The hookstep on the Bratu problem](examples/figures/how_it_works.png)
+![The hookstep on the Bratu problem](examples/how_it_works/how_it_works.png)
 
 On the left, one singular direction carries nearly all of the GMRES step. In the middle, the filter
 for the multiplier $\mu_\star$ of this radius and for two others. On the right, $\mu_\star$ is the
 root of $\lVert s(\mu)\rVert = \Delta$. The script is
-[`examples/how_it_works.jl`](examples/how_it_works.jl).
+[`examples/how_it_works/how_it_works.jl`](examples/how_it_works/how_it_works.jl).
 
 The two limits fix the path of the step as the radius changes. For $\mu \to \infty$, (6) gives
 $s_i \to d_i p_i/\mu$, so $y$ is parallel to $V D\,p = H^{\mathsf T}\beta e_1$. This is minus the
@@ -1293,7 +1436,9 @@ A ratio near one says that the model holds at this distance. A trial is accepted
 $\rho > \eta$, with $\eta$ the keyword `eta`. The predicted reduction is positive for every step
 considered here, since each has a model residual below $\beta$. With $\eta \ge 0$ an accepted step
 therefore lowers $\lVert F\rVert$, by at least the fraction $\eta$ of what the model promised. A
-ratio that is not a number counts as a rejection.
+ratio that is not a number counts as a rejection. When the Jacobian is singular to rounding the
+computed prediction can lose its sign. The code divides by its size, so the ratio always has the
+sign of the actual reduction.
 
 ### The rules of the radius
 
@@ -1326,7 +1471,8 @@ ones, and it returns an accepted step in any case.
 
 ### The acceptance test of backtracking
 
-Backtracking tries the steps $\lambda\,\delta_N$ along the GMRES step, with $\lambda = 1$ first, or
+Backtracking is a line search along the Newton direction [20, 22]. It tries the steps
+$\lambda\,\delta_N$ along the GMRES step, with $\lambda = 1$ first, or
 $\lambda = \Delta_{\max}/\lVert\delta_N\rVert$ if that is smaller, and then half the last value. The
 ratio (7) needs the prediction for $y = \lambda y_N$. Write $e = \beta e_1 - H y_N$ for the
 residual of (4). It is orthogonal to the range of $H$, so $e\cdot\beta e_1 = \lVert e\rVert^2$, and
@@ -1466,14 +1612,30 @@ box for what it costs.
 julia --project -e 'using Pkg; Pkg.test()'
 ```
 
-[`test/test_claims.jl`](test/test_claims.jl) holds one test per claim on the behaviour of the
-solver, named after the claim. [`test/test_methods.jl`](test/test_methods.jl) runs the seven methods
-of [Globalisation](#globalisation) with the three built-in Jacobians on ten test problems, and
-checks the invariants of the trace on each search.
+The tests are in four files beside the unit tests of the Jacobians and of the solver.
+
+- [`test/test_claims.jl`](test/test_claims.jl) holds one test per claim on the behaviour of the
+  solver, named after the claim.
+- [`test/test_methods.jl`](test/test_methods.jl) runs the seven methods of
+  [Globalisation](#globalisation) with the three built-in Jacobians on ten test problems, and checks
+  the invariants of the trace on each search.
+- [`test/test_preconditioning.jl`](test/test_preconditioning.jl) checks the preconditioner and the
+  length of the step against dense algebra. On problems of a few unknowns, with a Krylov space that
+  fills the space, the step that the solver takes is compared with the Newton step, with the
+  trust-region step of the same radius and with the acceleration, each computed from the Jacobian as
+  a matrix. This is done for every globalisation and for every way of giving the metric, which are
+  no preconditioner, the default `gram`, a `gram` that returns $G$, one that returns $R$, and
+  `flexible=true`. The file also checks the calls of `update!`, `ldiv!` and `gram` with a
+  preconditioner that records them, and the numbers of the printed table against the trace.
+- [`test/test_examples.jl`](test/test_examples.jl) runs a reduced version of the examples of this
+  page, with one invariant of the physics of each. For the channel it is the balance of the total
+  stress, and for Kolmogorov flow the balance of dissipation and input.
 
 ## References
 
-Each entry says what this page takes from it.
+Each entry says what this page takes from it. Entries 1 to 7 are the sources of what the package
+implements, and entry 25 that of the second example. The others credit the methods and the model
+that the package builds on.
 
 1. D. Viswanath, *Recurrent motions within plane Couette turbulence*, J. Fluid Mech. 580 (2007)
    339–358. [doi](https://doi.org/10.1017/S0022112007005459). Section 2.3 computes the hookstep
@@ -1502,3 +1664,47 @@ Each entry says what this page takes from it.
    least-squares minimization*, [arXiv:1201.5885](https://arxiv.org/abs/1201.5885) (2012). Section 3,
    the geodesic acceleration, its finite difference with $h = 0.1$, and the test on the length of
    the acceleration with $\alpha = 0.75$.
+8. W. E. Arnoldi, *The principle of minimized iterations in the solution of the matrix eigenvalue
+   problem*, Q. Appl. Math. 9 (1951) 17–29. [doi](https://doi.org/10.1090/qam/42792). The Arnoldi
+   iteration.
+9. Y. Saad and M. H. Schultz, *GMRES: a generalized minimal residual algorithm for solving
+   nonsymmetric linear systems*, SIAM J. Sci. Stat. Comput. 7 (1986) 856–869.
+   [doi](https://doi.org/10.1137/0907058). GMRES.
+10. P. N. Brown and Y. Saad, *Hybrid Krylov methods for nonlinear systems of equations*, SIAM J. Sci.
+    Stat. Comput. 11 (1990) 450–481. [doi](https://doi.org/10.1137/0911026). Newton–Krylov methods.
+11. P. N. Brown and Y. Saad, *Convergence theory of nonlinear Newton–Krylov algorithms*, SIAM J.
+    Optim. 4 (1994) 297–330. [doi](https://doi.org/10.1137/0804017). Newton–Krylov methods.
+12. C. T. Kelley, *Solving Nonlinear Equations with Newton's Method*, SIAM (2003).
+    [doi](https://doi.org/10.1137/1.9780898718898). Newton–Krylov methods.
+13. M. Pernice and H. F. Walker, *NITSOL: a Newton iterative solver for nonlinear systems*, SIAM J.
+    Sci. Comput. 19 (1998) 302–318. [doi](https://doi.org/10.1137/S1064827596303843). A
+    Newton–Krylov solver.
+14. R. S. Dembo, S. C. Eisenstat and T. Steihaug, *Inexact Newton methods*, SIAM J. Numer. Anal. 19
+    (1982) 400–408. [doi](https://doi.org/10.1137/0719025). Inexact Newton methods.
+15. S. C. Eisenstat and H. F. Walker, *Choosing the forcing terms in an inexact Newton method*, SIAM
+    J. Sci. Comput. 17 (1996) 16–32. [doi](https://doi.org/10.1137/0917003). The forcing terms.
+16. K. Levenberg, *A method for the solution of certain non-linear problems in least squares*, Q.
+    Appl. Math. 2 (1944) 164–168. [doi](https://doi.org/10.1090/qam/10666). The damped least-squares
+    step.
+17. D. W. Marquardt, *An algorithm for least-squares estimation of nonlinear parameters*, J. Soc.
+    Indust. Appl. Math. 11 (1963) 431–441. [doi](https://doi.org/10.1137/0111030). The damped
+    least-squares step.
+18. J. J. Moré, *The Levenberg–Marquardt algorithm: implementation and theory*, in *Numerical
+    Analysis*, Lecture Notes in Mathematics 630, Springer (1978) 105–116.
+    [doi](https://doi.org/10.1007/BFb0067700). The trust-region subproblem.
+19. J. J. Moré and D. C. Sorensen, *Computing a trust region step*, SIAM J. Sci. Stat. Comput. 4
+    (1983) 553–572. [doi](https://doi.org/10.1137/0904038). The trust-region subproblem.
+20. J. E. Dennis and R. B. Schnabel, *Numerical Methods for Unconstrained Optimization and Nonlinear
+    Equations*, SIAM (1996). [doi](https://doi.org/10.1137/1.9781611971200). The hookstep and line
+    searches.
+21. A. R. Conn, N. I. M. Gould and P. L. Toint, *Trust Region Methods*, SIAM (2000).
+    [doi](https://doi.org/10.1137/1.9780898719857). Trust-region methods.
+22. J. Nocedal and S. J. Wright, *Numerical Optimization*, 2nd edition, Springer (2006).
+    [doi](https://doi.org/10.1007/978-0-387-40065-5). Trust-region methods and line searches.
+23. A. Griewank and A. Walther, *Evaluating Derivatives*, 2nd edition, SIAM (2008).
+    [doi](https://doi.org/10.1137/1.9780898717761). Automatic differentiation.
+24. P. R. Spalart and S. R. Allmaras, *A one-equation turbulence model for aerodynamic flows*, La
+    Recherche Aérospatiale 1 (1994) 5–21. The turbulence model of the channel example.
+25. M. Golden, *A catalog of exact steady states in Kolmogorov flow*,
+    [arXiv:2609.27062](https://arxiv.org/abs/2609.27062) (2026). Section 2, the equations, the grid,
+    the guesses of filtered noise and the preconditioner of the Kolmogorov example.

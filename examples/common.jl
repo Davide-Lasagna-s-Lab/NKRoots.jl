@@ -1,4 +1,6 @@
-# What the examples share: the plots, and the two equations of the first examples.
+# What the examples share: the plots, and the two equations of the first examples. Each example is a
+# folder examples/<name> with its script <name>.jl and the figures that the script writes, and its
+# script includes this file as include(joinpath(@__DIR__, "..", "common.jl")).
 using CairoMakie
 using LinearAlgebra
 using Printf
@@ -25,11 +27,10 @@ set_theme!(Theme(fontsize=14,
                  Lines=(linewidth=2,),
                  Scatterlines=(linewidth=2, markersize=8)))
 
-figure_path(name) = joinpath(@__DIR__, "figures", "$name.png")
-
-function finish(fig, name)
-    mkpath(dirname(figure_path(name)))
-    save(figure_path(name), fig; px_per_unit=2)
+# save the figure at `path`, which a script builds from its own folder, joinpath(@__DIR__, "name.png"),
+# so that the figure lands next to the script that makes it
+function finish(fig, path)
+    save(path, fig; px_per_unit=2)
     return fig
 end
 

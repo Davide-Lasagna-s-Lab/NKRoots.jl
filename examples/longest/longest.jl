@@ -3,8 +3,8 @@
 # crawls along the bent valley in short steps, since a long straight step leaves it. A scan that keeps
 # the longest step that lowers the residual, scan=:longest, follows the valley in a few long steps.
 #
-#     julia --project=examples examples/longest.jl
-include("common.jl")
+#     julia --project=examples examples/longest/longest.jl
+include(joinpath(@__DIR__, "..", "common.jl"))
 
 
 # ---- the valley: the parabola, and the same sheared by 10⁻³ ----
@@ -89,4 +89,4 @@ end
 Legend(fig[3, 1:2], ax₂; orientation=:horizontal, tellwidth=false, labelsize=12)
 rowsize!(fig.layout, 1, Relative(0.58))
 
-finish(fig, "longest")
+finish(fig, joinpath(@__DIR__, "longest.png"))

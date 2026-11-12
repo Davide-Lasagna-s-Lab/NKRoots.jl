@@ -15,10 +15,10 @@
 #    Gram matrix of the vectors M⁻¹ qⱼ squares this spread, and the short vectors are lost to
 #    rounding. Flexible GMRES keeps them, and so does a gram that returns the triangular root.
 #
-#     julia --project=examples examples/preconditioner.jl
+#     julia --project=examples examples/preconditioner/preconditioner.jl
 using Random
-include("common.jl")
-include("bratu_problem.jl")
+include(joinpath(@__DIR__, "..", "common.jl"))
+include(joinpath(@__DIR__, "..", "bratu_problem.jl"))
 
 
 # ---------------------------------------------------------------------------- #
@@ -251,4 +251,4 @@ scatterlines!(ax₃, root.iter, max.(root.res, 1e-16); color=AQUA, label="gram r
 scatterlines!(ax₃, flex.iter, max.(flex.res, 1e-16); color=ORANGE, label="flexible=true", marker=:rect)
 axislegend(ax₃; position=:rt, labelsize=12)
 
-finish(fig, "preconditioner")
+finish(fig, joinpath(@__DIR__, "preconditioner.png"))

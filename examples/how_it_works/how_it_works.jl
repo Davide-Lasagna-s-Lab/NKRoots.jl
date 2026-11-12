@@ -3,9 +3,9 @@
 # draws the three facts behind the hookstep: the short singular directions carry the long components
 # of the GMRES step, the multiplier μ filters them out, and μ is the root of ‖s(μ)‖ = Δ.
 #
-#     julia --project=examples examples/how_it_works.jl
-include("common.jl")
-include("bratu_problem.jl")
+#     julia --project=examples examples/how_it_works/how_it_works.jl
+include(joinpath(@__DIR__, "..", "common.jl"))
+include(joinpath(@__DIR__, "..", "bratu_problem.jl"))
 
 
 # ---- the Krylov space, by the Arnoldi iteration of the solver ----
@@ -70,4 +70,4 @@ scatter!(ax₃, [μ★], [Δ]; color=:white, strokecolor=ORANGE, strokewidth=2, 
 text!(ax₃, μs[1], Δ; text=" Δ", color=INK, fontsize=13, align=(:left, :bottom))
 text!(ax₃, μ★*1.5, Δ*1.1; text="μ★", color=INK, fontsize=13)
 
-finish(fig, "how_it_works")
+finish(fig, joinpath(@__DIR__, "how_it_works.png"))

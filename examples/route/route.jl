@@ -3,8 +3,8 @@
 # landscape of ½‖F‖². Most end at a root. One ends in a valley with no root, a local minimum of ½‖F‖²,
 # where the search stops with the status :collapsed or :maxiter.
 #
-#     julia --project=examples examples/route.jl
-include("common.jl")
+#     julia --project=examples examples/route/route.jl
+include(joinpath(@__DIR__, "..", "common.jl"))
 
 
 # ---- one search, its iterates kept by the trace ----
@@ -46,4 +46,4 @@ scatter!(ax, [1.0, x₋[1]], [1.0, x₋[2]]; color=:black, marker=:star5, marker
 text!(ax, -1.9, -1.3; text="x₁² + x₂² = 2", color=INK, fontsize=13)
 text!(ax, 1.25, 1.75; text="exp(x₁ - 1) + x₂³ = 2", color=INK, fontsize=13, align=(:center, :bottom))
 
-finish(fig, "route")
+finish(fig, joinpath(@__DIR__, "route.png"))

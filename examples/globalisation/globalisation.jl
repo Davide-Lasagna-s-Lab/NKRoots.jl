@@ -8,9 +8,9 @@
 # Settings: n = 200, krylov_tol = 1e-6, krylov_dim = 50, tol = 1e-8, eta = 1e-3, maxiter = 100,
 # first radius Δ = 1 for the hookstep.
 #
-#     julia --project=examples examples/globalisation.jl
-include("common.jl")
-include("bratu_problem.jl")
+#     julia --project=examples examples/globalisation/globalisation.jl
+include(joinpath(@__DIR__, "..", "common.jl"))
+include(joinpath(@__DIR__, "..", "bratu_problem.jl"))
 
 
 # ---- the methods: name, keywords, colour and line style ----
@@ -77,4 +77,4 @@ for (m, s) in zip(methods, runs)
 end
 Legend(fig[2, 1:2], ax₁; orientation=:horizontal, tellwidth=false, labelsize=12, nbanks=3)
 
-finish(fig, "globalisation")
+finish(fig, joinpath(@__DIR__, "globalisation.png"))

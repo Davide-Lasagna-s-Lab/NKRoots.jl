@@ -3,8 +3,8 @@
 # Newton step, and the ratio ρ of the actual to the predicted reduction says how far the linear model
 # can be trusted.
 #
-#     julia --project=examples examples/hookstep.jl
-include("common.jl")
+#     julia --project=examples examples/hookstep/hookstep.jl
+include(joinpath(@__DIR__, "..", "common.jl"))
 
 
 # ---- one step from the guess for each radius: Δmax fixes the radius, eta accepts every trial ----
@@ -40,4 +40,4 @@ lines!(ax₂, radii, getfield.(steps, :ρ); color=BLUE)
 text!(ax₂, 0.0105, 0.76; text="above 3/4 on the boundary, Δ doubles", color=INK, fontsize=12, align=(:left, :bottom))
 text!(ax₂, 0.0105, 0.24; text="below 1/4, Δ shrinks by four", color=INK, fontsize=12, align=(:left, :top))
 
-finish(fig, "hookstep")
+finish(fig, joinpath(@__DIR__, "hookstep.png"))

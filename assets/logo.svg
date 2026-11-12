@@ -51,8 +51,8 @@
     <text x="0" y="48" font-family="Inter, Avenir, Helvetica, Arial, sans-serif"
           font-size="58" font-weight="820" fill="#222734" letter-spacing="0">NKRoots.jl</text>
     <text x="2" y="90" font-family="Inter, Avenir, Helvetica, Arial, sans-serif"
-          font-size="21" font-weight="700" fill="#4f596b" letter-spacing="0">Newton–Krylov hookstep for F(x) = 0,</text>
+          font-size="21" font-weight="700" fill="#4f596b" letter-spacing="0">Newton–Krylov solver for F(x) = 0,</text>
     <text x="2" y="118" font-family="Inter, Avenir, Helvetica, Arial, sans-serif"
-          font-size="21" font-weight="700" fill="#4f596b" letter-spacing="0">preconditioned, and traced step by step.</text>
+          font-size="21" font-weight="700" fill="#4f596b" letter-spacing="0">globalised, preconditioned and traced.</text>
   </g>
 </svg>

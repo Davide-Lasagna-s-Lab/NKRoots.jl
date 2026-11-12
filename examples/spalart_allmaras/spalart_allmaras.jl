@@ -30,9 +30,9 @@
 # integrates to (ν + νₜ) dU/dy = 1 - y, which checks the solution and its order of accuracy, and in the
 # log layer ν̃ = κ y, as the model was built to give.
 #
-#     julia --project=examples examples/spalart_allmaras.jl
+#     julia --project=examples examples/spalart_allmaras/spalart_allmaras.jl
 using FDGrids
-include("common.jl")
+include(joinpath(@__DIR__, "..", "common.jl"))
 
 
 # ---- the constants of the model ----
@@ -246,4 +246,4 @@ for (s, color, name) in zip(cases, SERIES, ("none", "Laplacian", "diffusion"))
 end
 axislegend(ax₃; position=:lb, labelsize=12, rowgap=0)
 
-finish(fig, "spalart_allmaras")
+finish(fig, joinpath(@__DIR__, "spalart_allmaras.png"))

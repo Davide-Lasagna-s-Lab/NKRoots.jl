@@ -1,11 +1,11 @@
-# The geodesic acceleration. The valley of examples/longest.jl, along the parabola x₂ = x₁², a
+# The geodesic acceleration. The valley of examples/longest/longest.jl, along the parabola x₂ = x₁², a
 # thousandth wide, with the root at the vertex. The hookstep with the classical rule crawls along it.
 # With acceleration=:geodesic every hookstep on the boundary of the trust region, the velocity, gets a
 # second-order correction that bends it with the valley, and the search reaches the root in a few
 # steps. The trust region bounds the velocity, so that a corrected step may leave it.
 #
-#     julia --project=examples examples/geodesic.jl
-include("common.jl")
+#     julia --project=examples examples/geodesic/geodesic.jl
+include(joinpath(@__DIR__, "..", "common.jl"))
 
 
 # ---- the valley: the parabola, and the same sheared by 10⁻³ ----
@@ -74,4 +74,4 @@ end
 Legend(fig[2, 1:3], bx; orientation=:horizontal, tellwidth=false, labelsize=12, nbanks=2)
 colsize!(fig.layout, 1, Relative(0.36))
 
-finish(fig, "geodesic")
+finish(fig, joinpath(@__DIR__, "geodesic.png"))

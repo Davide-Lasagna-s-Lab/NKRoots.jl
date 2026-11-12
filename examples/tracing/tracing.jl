@@ -7,9 +7,9 @@
 # Settings: n = 200, guess 20 sin(πx), finite-difference Jacobian, precond = lu(A), Δ = 20,
 # krylov_tol = 1e-6, krylov_dim = 50, tol = 1e-9, maxiter = 60.
 #
-#     julia --project=examples examples/tracing.jl
-include("common.jl")
-include("bratu_problem.jl")
+#     julia --project=examples examples/tracing/tracing.jl
+include(joinpath(@__DIR__, "..", "common.jl"))
+include(joinpath(@__DIR__, "..", "bratu_problem.jl"))
 
 
 # ---- the search, recorded; a first run compiles it, so that the times are those of the search ----
@@ -141,4 +141,4 @@ for k in eachindex(trace.x)
            colormap=[colorant"#b9d6f2", colorant"#123f78"], linewidth=1.5)
 end
 
-finish(fig, "tracing")
+finish(fig, joinpath(@__DIR__, "tracing.png"))

@@ -2,9 +2,9 @@
 # sets how well each Newton system is solved. A loose tolerance gives linear convergence with cheap
 # steps, a tight one the quadratic convergence of Newton's method. krylov_dim caps the space.
 #
-#     julia --project=examples examples/krylov.jl
-include("common.jl")
-include("bratu_problem.jl")
+#     julia --project=examples examples/krylov/krylov.jl
+include(joinpath(@__DIR__, "..", "common.jl"))
+include(joinpath(@__DIR__, "..", "bratu_problem.jl"))
 
 
 # ---- the searches, with the preconditioner so that the tolerance alone decides ----
@@ -36,4 +36,4 @@ for (t, c, l) in zip(bydim, SERIES, string.(dims))
 end
 axislegend(ax₂; position=:rt)
 
-finish(fig, "krylov")
+finish(fig, joinpath(@__DIR__, "krylov.png"))

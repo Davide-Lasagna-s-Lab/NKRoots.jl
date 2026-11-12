@@ -3,8 +3,8 @@
 # an inexact Jacobian costs: the search still converges, because the residual is exact, but it loses
 # the fast final phase of Newton's method.
 #
-#     julia --project=examples examples/jacobians.jl
-include("common.jl")
+#     julia --project=examples examples/jacobians/jacobians.jl
+include(joinpath(@__DIR__, "..", "common.jl"))
 
 
 # ---- the Jacobian as an object: mul! applies it, update! moves it ----
@@ -59,4 +59,4 @@ scatterlines!(ax, 0:length(mine.res) - 1, floor(mine.res); color=AQUA, label="yo
 scatterlines!(ax, 0:length(rough.res) - 1, floor(rough.res); color=YELLOW, label="jacobian=:fd, ϵ=1e-2", marker=:utriangle)
 axislegend(ax; position=:rt)
 
-finish(fig, "jacobians")
+finish(fig, joinpath(@__DIR__, "jacobians.png"))

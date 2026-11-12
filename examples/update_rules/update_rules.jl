@@ -4,8 +4,8 @@
 # against the Krylov space. The options Δ, Δmax and eta set the first radius, the largest radius and
 # the smallest ratio for a step to be accepted.
 #
-#     julia --project=examples examples/update_rules.jl
-include("common.jl")
+#     julia --project=examples examples/update_rules/update_rules.jl
+include(joinpath(@__DIR__, "..", "common.jl"))
 
 
 # ---- a guess far from the roots ----
@@ -60,4 +60,4 @@ panel!(1, "the first radius Δ", first_radii, ["0.001", "0.01", "0.1", "1"])
 panel!(2, "the largest radius Δmax", caps, ["0.05", "0.2", "1", "∞"])
 panel!(3, "the smallest ratio eta", etas, ["0.001", "0.1", "0.5", "0.9"])
 
-finish(fig, "update_rules")
+finish(fig, joinpath(@__DIR__, "update_rules.png"))

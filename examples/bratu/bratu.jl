@@ -5,9 +5,9 @@
 #
 # which checks the searches.
 #
-#     julia --project=examples examples/bratu.jl
-include("common.jl")
-include("bratu_problem.jl")
+#     julia --project=examples examples/bratu/bratu.jl
+include(joinpath(@__DIR__, "..", "common.jl"))
+include(joinpath(@__DIR__, "..", "bratu_problem.jl"))
 
 
 # ---- the two values of θ, by the same solver ----
@@ -52,4 +52,4 @@ scatterlines!(ax₂, 0:length(low_trace) - 1, low_trace.res; color=BLUE, label="
 scatterlines!(ax₂, 0:length(high_trace) - 1, high_trace.res; color=ORANGE, marker=:rect, label="from the tall guess")
 axislegend(ax₂; position=:lb, labelsize=12, rowgap=0)
 
-finish(fig, "bratu")
+finish(fig, joinpath(@__DIR__, "bratu.png"))
