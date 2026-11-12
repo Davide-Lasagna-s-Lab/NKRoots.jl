@@ -36,17 +36,20 @@ for (t, c, m, name) in ((classical, BLUE, :circle, "trust=:classical"), (scan, Y
 end
 Legend(fig[2, 1], ax₁; orientation=:horizontal, tellwidth=false, labelsize=12)
 
-ax₂ = Axis(fig[1, 2]; title="the radius of the accepted step", xlabel="Newton step", ylabel="Δ", yscale=log10)
+ax₂ = Axis(fig[1, 2]; title="the radius of the accepted step", xlabel="Newton step", ylabel="Δ", yscale=log10,
+           yticks=LogTicks(-2:1), limits=(nothing, (1e-2, 1e1)))
 scatterlines!(ax₂, 1:length(classical.radius) - 1, classical.radius[2:end]; color=BLUE)
 scatterlines!(ax₂, 1:length(scan.radius) - 1, scan.radius[2:end]; color=YELLOW, marker=:rect)
 
-ax₃ = Axis(fig[1, 3]; title="the cost", xlabel="residuals", ylabel="‖F‖", yscale=log10, yticks=LogTicks(-12:4:4))
+ax₃ = Axis(fig[1, 3]; title="the cost", xlabel="residuals", ylabel="‖F‖", yscale=log10, yticks=LogTicks(-16:4:4),
+           limits=(nothing, (1e-16, 1e4)))
 scatterlines!(ax₃, classical.residuals, max.(classical.res, 1e-16); color=BLUE)
 scatterlines!(ax₃, scan.residuals, max.(scan.res, 1e-16); color=YELLOW, marker=:rect)
 
 # ---- the options ----
 function panel!(pos, title, traces, labels)
-    ax = Axis(fig[3, pos]; title=title, xlabel="Newton step", ylabel="‖F‖", yscale=log10, yticks=LogTicks(-12:4:4))
+    ax = Axis(fig[3, pos]; title=title, xlabel="Newton step", ylabel="‖F‖", yscale=log10, yticks=LogTicks(-16:4:4),
+              limits=(nothing, (1e-16, 1e4)))
     for (t, c, l) in zip(traces, SERIES, labels)
         lines!(ax, 0:length(t.res) - 1, max.(t.res, 1e-16); color=c, label=l)
     end

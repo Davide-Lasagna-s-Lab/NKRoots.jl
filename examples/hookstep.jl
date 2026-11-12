@@ -9,7 +9,7 @@ include("common.jl")
 
 # ---- one step from the guess for each radius: Δmax fixes the radius, eta accepts every trial ----
 x₀    = [1.8, 0.7]
-radii = 10 .^ range(-2, 0.6; length=80)
+radii = 10 .^ range(-2, 1; length=100)
 steps = map(radii) do Δ
     x = copy(x₀)
     t = Trace()
@@ -33,7 +33,8 @@ scatter!(ax₁, [1.0], [1.0]; color=:black, marker=:star5, markersize=14)
 text!(ax₁, 1.86, 0.62; text="guess", color=INK, fontsize=13)
 text!(ax₁, 0.97, 1.05; text="root", color=INK, fontsize=13, align=(:right, :bottom))
 
-ax₂ = Axis(fig[1, 2]; title="the ratio ρ", xlabel="radius Δ", ylabel="actual / predicted", xscale=log10)
+ax₂ = Axis(fig[1, 2]; title="the ratio ρ", xlabel="radius Δ", ylabel="actual / predicted", xscale=log10,
+           xticks=LogTicks(-2:1), limits=((1e-2, 1e1), nothing))
 hlines!(ax₂, [0.25, 0.75]; color=(:black, 0.45), linestyle=:dash, linewidth=1)
 lines!(ax₂, radii, getfield.(steps, :ρ); color=BLUE)
 text!(ax₂, 0.0105, 0.76; text="above 3/4 on the boundary, Δ doubles", color=INK, fontsize=12, align=(:left, :bottom))

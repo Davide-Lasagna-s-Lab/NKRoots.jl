@@ -46,7 +46,8 @@ lines!(ax₁, xs, high; color=ORANGE, label="upper solution")
 lines!(ax₁, xs, low; color=BLUE, label="lower solution")
 axislegend(ax₁; position=:rt, labelsize=12, rowgap=0)
 
-ax₂ = Axis(fig[1, 2]; title="the two searches", xlabel="Newton step", ylabel="‖F‖", yscale=log10)
+ax₂ = Axis(fig[1, 2]; title="the two searches", xlabel="Newton step", ylabel="‖F‖", yscale=log10,
+           yticks=LogTicks(-10:2:6), limits=(nothing, (1e-10, 1e6)))
 scatterlines!(ax₂, 0:length(low_trace) - 1, low_trace.res; color=BLUE, label="from zero")
 scatterlines!(ax₂, 0:length(high_trace) - 1, high_trace.res; color=ORANGE, marker=:rect, label="from the tall guess")
 axislegend(ax₂; position=:lb, labelsize=12, rowgap=0)

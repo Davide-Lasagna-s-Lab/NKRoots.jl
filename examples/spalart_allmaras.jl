@@ -232,7 +232,7 @@ end
 axislegend(ax₁, "Reτ"; position=:lt, labelsize=12, rowgap=0)
 
 ax₂ = Axis(fig[1, 2]; title="the working variable", xlabel="y⁺", ylabel="ν̃⁺", xscale=log10, yscale=log10,
-           xticks=[1, 10, 100, 1000], limits=((0.5, 8000), (0.1, 2000)))
+           xticks=[1, 10, 100, 1000], yticks=LogTicks(-1:3), limits=((0.5, 8000), (0.1, 2000)))
 lines!(ax₂, yl, κ .* yl; color=:gray55, linestyle=:dot, linewidth=1.5)
 text!(ax₂, 25, 40; text="κ y⁺", color=INK, fontsize=12)
 for (i, shade) in zip(shown, shades)
@@ -240,7 +240,7 @@ for (i, shade) in zip(shown, shades)
 end
 
 ax₃ = Axis(fig[1, 3]; title="three preconditioners, 550 to 1000", xlabel="Jacobian products", ylabel="‖F‖", xscale=log10,
-           yscale=log10, yticks=LogTicks(-12:2:0))
+           yscale=log10, xticks=LogTicks(1:5), yticks=LogTicks(-12:2:0))
 for (s, color, name) in zip(cases, SERIES, ("none", "Laplacian", "diffusion"))
     lines!(ax₃, s.trace.products[2:end], s.trace.res[2:end]; color=color, label=name)
 end

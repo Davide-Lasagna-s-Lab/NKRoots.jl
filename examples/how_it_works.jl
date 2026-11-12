@@ -49,19 +49,21 @@ end
 fig = Figure(size=(960, 360))
 
 ax₁ = Axis(fig[1, 1]; title="the GMRES step by singular direction", xlabel="singular value dᵢ", ylabel="|pᵢ/dᵢ|",
-           xscale=log10, yscale=log10)
+           xscale=log10, yscale=log10, xticks=LogTicks(0:6), yticks=LogTicks(-16:4:0),
+           limits=((1e0, 1e6), (1e-16, 1e1)))
 scatter!(ax₁, d, abs.(p ./ d); color=BLUE, markersize=9)
 
 ax₂ = Axis(fig[1, 2]; title="the filter dᵢ²/(dᵢ² + μ)", xlabel="singular value dᵢ", ylabel="what the step keeps",
-           xscale=log10)
-grid = 10 .^ range(log10(minimum(d)), log10(maximum(d)); length=200)
+           xscale=log10, xticks=LogTicks(0:6), limits=((1e0, 1e6), nothing))
+grid = 10 .^ range(0, 6; length=200)
 for (μ, colour, name) in ((μ★/100, AQUA, "μ★/100"), (μ★, ORANGE, "μ★"), (100μ★, YELLOW, "100 μ★"))
     lines!(ax₂, grid, grid.^2 ./ (grid.^2 .+ μ); color=colour, label=name)
 end
 axislegend(ax₂; position=:rb, labelsize=12, rowgap=0)
 
-ax₃ = Axis(fig[1, 3]; title="the length of the step", xlabel="multiplier μ", ylabel="‖s(μ)‖", xscale=log10, yscale=log10)
-μs = 10 .^ range(log10(μ★) - 3, log10(μ★) + 3; length=200)
+ax₃ = Axis(fig[1, 3]; title="the length of the step", xlabel="multiplier μ", ylabel="‖s(μ)‖", xscale=log10, yscale=log10,
+           xticks=LogTicks(-1:5), yticks=LogTicks(-3:1), limits=((1e-1, 1e5), (1e-3, 1e1)))
+μs = 10 .^ range(-1, 5; length=200)
 lines!(ax₃, μs, ℓ.(μs); color=BLUE)
 hlines!(ax₃, [Δ]; color=(:black, 0.45), linestyle=:dash, linewidth=1)
 scatter!(ax₃, [μ★], [Δ]; color=:white, strokecolor=ORANGE, strokewidth=2, markersize=11)
